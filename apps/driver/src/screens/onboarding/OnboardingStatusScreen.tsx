@@ -1,0 +1,71 @@
+import { useEffect } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View
+} from 'react-native';
+import { colors, radius, spacing, typography } from '../../theme';
+import { useDriverSessionStore } from '../../store/useDriverSessionStore';
+import { useOnboardingStore } from '../../store/useOnboardingStore';
+
+export function OnboardingStatusScreen() {
+  const sessionRefresh = useDriverSessionStore((state) => state.refreshOnboardingStatus);
+  const onboardingStatus = useDriverSessionStore((state) => state.onboardingStatus);
+  const load = useOnboardingStore((state) => state.load);
+  const loading = useOnboardingStore((state) => state.loading);
+
+  useEffect(() => {
+    void Promise.all([load(), sessionRefresh()]);
+  }, [load, sessionRefresh]);
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.container}>
+        <Text style={styles.title}>KYC Verification Status</Text>
+        <View style={styles.card}>
+          <Text style={styles.label}>Current Status</Text>
+          <Text style={styles.status}>{onboardingStatus ?? 'SUBMITTED'}</Text>
+
+          <Text style={styles.subtitle}>
+            If status is APPROVED, this screen will close automatically and driver dashboard will open.
+          </Text>
+
+          <Pressable style={styles.refreshButton} onPress={() => void Promise.all([load(), sessionRefresh()])}>
+            {loading ? <ActivityIndicator color={colors.white} /> : <Text style={styles.refreshText}>Refresh status</Text>}
+          </Pressable>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.paper },
+  container: { flex: 1, padding: spacing.lg, justifyContent: 'center', gap: spacing.md },
+  title: { fontFamily: typography.heading, fontSize: 28, color: colors.accent },
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    borderColor: colors.border,
+    borderWidth: 1,
+    padding: spacing.lg,
+    gap: spacing.sm
+  },
+  label: { fontFamily: typography.bodyBold, color: colors.mutedText },
+  status: { fontFamily: typography.heading, fontSize: 30, color: colors.secondary },
+  subtitle: { fontFamily: typography.body, color: colors.mutedText, fontSize: 13 },
+  refreshButton: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.primary,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    paddingVertical: spacing.sm
+  },
+  refreshText: {
+    color: colors.white,
+    fontFamily: typography.bodyBold
+  }
+});

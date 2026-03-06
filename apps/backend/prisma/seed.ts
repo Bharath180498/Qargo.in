@@ -4,7 +4,8 @@ import {
   VehicleType,
   VerificationStatus,
   AvailabilityStatus,
-  OrderStatus
+  OrderStatus,
+  OnboardingStatus
 } from '@prisma/client';
 
 const prisma = new PrismaClient();
@@ -35,6 +36,36 @@ async function main() {
   });
 
   void admin;
+
+  await prisma.user.upsert({
+    where: { phone: '+919000000001' },
+    update: {
+      role: UserRole.CUSTOMER,
+      name: 'Customer Demo'
+    },
+    create: {
+      name: 'Customer Demo',
+      phone: '+919000000001',
+      email: 'customer.demo@porter.local',
+      role: UserRole.CUSTOMER,
+      rating: 4.9
+    }
+  });
+
+  const driverDemoUser = await prisma.user.upsert({
+    where: { phone: '+919000000101' },
+    update: {
+      role: UserRole.DRIVER,
+      name: 'Driver Demo'
+    },
+    create: {
+      name: 'Driver Demo',
+      phone: '+919000000101',
+      email: 'driver.demo@porter.local',
+      role: UserRole.DRIVER,
+      rating: 4.8
+    }
+  });
 
   const driverUsers = await Promise.all(
     [
@@ -88,6 +119,67 @@ async function main() {
       })
     )
   );
+
+  const demoDriverProfile = await prisma.driverProfile.upsert({
+    where: { userId: driverDemoUser.id },
+    update: {
+      vehicleType: VehicleType.MINI_TRUCK,
+      vehicleNumber: 'KA01DM0101',
+      licenseNumber: 'DL0420120010101',
+      aadhaarNumber: '123412341010',
+      verificationStatus: VerificationStatus.APPROVED,
+      availabilityStatus: AvailabilityStatus.OFFLINE,
+      currentLat: 12.9716,
+      currentLng: 77.5946,
+      idleSince: new Date()
+    },
+    create: {
+      userId: driverDemoUser.id,
+      vehicleType: VehicleType.MINI_TRUCK,
+      vehicleNumber: 'KA01DM0101',
+      licenseNumber: 'DL0420120010101',
+      aadhaarNumber: '123412341010',
+      verificationStatus: VerificationStatus.APPROVED,
+      availabilityStatus: AvailabilityStatus.OFFLINE,
+      currentLat: 12.9716,
+      currentLng: 77.5946,
+      idleSince: new Date()
+    }
+  });
+
+  await prisma.driverOnboarding.upsert({
+    where: { userId: driverDemoUser.id },
+    update: {
+      status: OnboardingStatus.APPROVED,
+      fullName: driverDemoUser.name,
+      phone: driverDemoUser.phone,
+      vehicleType: VehicleType.MINI_TRUCK,
+      vehicleNumber: demoDriverProfile.vehicleNumber,
+      licenseNumber: demoDriverProfile.licenseNumber,
+      aadhaarNumber: demoDriverProfile.aadhaarNumber,
+      accountHolderName: 'Driver Demo',
+      bankName: 'HDFC Bank',
+      accountNumber: '123456789000',
+      ifscCode: 'HDFC0000123',
+      approvedAt: new Date()
+    },
+    create: {
+      userId: driverDemoUser.id,
+      status: OnboardingStatus.APPROVED,
+      fullName: driverDemoUser.name,
+      phone: driverDemoUser.phone,
+      vehicleType: VehicleType.MINI_TRUCK,
+      vehicleNumber: demoDriverProfile.vehicleNumber,
+      licenseNumber: demoDriverProfile.licenseNumber,
+      aadhaarNumber: demoDriverProfile.aadhaarNumber,
+      accountHolderName: 'Driver Demo',
+      bankName: 'HDFC Bank',
+      accountNumber: '123456789000',
+      ifscCode: 'HDFC0000123',
+      submittedAt: new Date(),
+      approvedAt: new Date()
+    }
+  });
 
   await prisma.order.create({
     data: {

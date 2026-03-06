@@ -42,9 +42,9 @@ export const VEHICLE_UI_META: Record<
 };
 
 export const DISPATCH_WEIGHTS = {
-  proximity: 0.45,
-  rating: 0.25,
-  idleTime: 0.2,
+  eta: 0.55,
+  rating: 0.2,
+  idleTime: 0.15,
   vehicleMatch: 0.1
 } as const;
 

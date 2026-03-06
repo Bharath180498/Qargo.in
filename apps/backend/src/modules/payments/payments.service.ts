@@ -14,19 +14,25 @@ export class PaymentsService {
       throw new NotFoundException('Order not found');
     }
 
+    const providerRef =
+      payload.provider === PaymentProvider.RAZORPAY
+        ? `rzp_order_${Date.now()}`
+        : `intent_${payload.provider.toLowerCase()}_${Date.now()}`;
+
     const payment = await this.prisma.payment.upsert({
       where: { orderId: payload.orderId },
       update: {
         amount: payload.amount,
         provider: payload.provider,
-        status: PaymentStatus.PENDING
+        status: PaymentStatus.PENDING,
+        providerRef
       },
       create: {
         orderId: payload.orderId,
         amount: payload.amount,
         provider: payload.provider,
         status: PaymentStatus.PENDING,
-        providerRef: `INTENT_${payload.provider}_${Date.now()}`
+        providerRef
       }
     });
 
@@ -34,7 +40,10 @@ export class PaymentsService {
       paymentId: payment.id,
       provider: payment.provider,
       providerRef: payment.providerRef,
-      clientSecret: `client_secret_${payment.id}`,
+      clientSecret:
+        payload.provider === PaymentProvider.RAZORPAY
+          ? `rzp_client_secret_${payment.id}`
+          : `client_secret_${payment.id}`,
       amount: Number(payment.amount)
     };
   }
@@ -64,5 +73,49 @@ export class PaymentsService {
 
   defaultProvider() {
     return PaymentProvider.RAZORPAY;
+  }
+
+  async handleRazorpayWebhook(payload: {
+    event: string;
+    providerRef?: string;
+    success?: boolean;
+  }) {
+    if (!payload.providerRef) {
+      return {
+        received: true,
+        updated: false,
+        reason: 'providerRef missing'
+      };
+    }
+
+    const payment = await this.prisma.payment.findFirst({
+      where: {
+        provider: PaymentProvider.RAZORPAY,
+        providerRef: payload.providerRef
+      }
+    });
+
+    if (!payment) {
+      return {
+        received: true,
+        updated: false,
+        reason: 'payment not found'
+      };
+    }
+
+    const status = payload.success ? PaymentStatus.CAPTURED : PaymentStatus.FAILED;
+    const updated = await this.prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status
+      }
+    });
+
+    return {
+      received: true,
+      updated: true,
+      paymentId: updated.id,
+      status: updated.status
+    };
   }
 }

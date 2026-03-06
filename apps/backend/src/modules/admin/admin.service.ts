@@ -7,10 +7,14 @@ import {
   VerificationStatus
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { KycService } from '../kyc/kyc.service';
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly kycService: KycService
+  ) {}
 
   async overview() {
     const [onlineDrivers, busyDrivers, pendingDrivers, tripsToday, activeOrders, completedOrders, revenue] =
@@ -269,5 +273,59 @@ export class AdminService {
       scheduledDispatchOrders: scheduledOrders,
       activeTripsMonitored: sosEvents
     };
+  }
+
+  async dispatchAnalytics() {
+    const decisions = await this.prisma.dispatchDecision.findMany({
+      where: {
+        createdAt: {
+          gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 500
+    });
+
+    const offersCreated = decisions.filter((entry) =>
+      ['NEW_ASSIGNMENT', 'REASSIGNMENT', 'QUEUE_OFFER'].includes(entry.assignmentMode)
+    ).length;
+    const offersAccepted = decisions.filter((entry) =>
+      ['OFFER_ACCEPTED', 'QUEUE_ACCEPTED'].includes(entry.assignmentMode)
+    ).length;
+    const offersRejected = decisions.filter((entry) => entry.assignmentMode === 'OFFER_REJECTED').length;
+    const noOffer = decisions.filter((entry) => entry.assignmentMode === 'NO_OFFER').length;
+    const etaEntries = decisions
+      .map((entry) => entry.routeEtaMinutes)
+      .filter((value): value is number => typeof value === 'number' && value > 0);
+
+    const avgEtaMinutes =
+      etaEntries.length > 0
+        ? Number((etaEntries.reduce((sum, value) => sum + value, 0) / etaEntries.length).toFixed(2))
+        : null;
+
+    const acceptanceRate =
+      offersCreated > 0 ? Number((offersAccepted / offersCreated).toFixed(3)) : 0;
+
+    return {
+      window: '7d',
+      offersCreated,
+      offersAccepted,
+      offersRejected,
+      noOfferDecisions: noOffer,
+      acceptanceRate,
+      avgEtaMinutes
+    };
+  }
+
+  pendingKycReview() {
+    return this.kycService.pendingReview();
+  }
+
+  approveKyc(verificationId: string, adminUserId: string) {
+    return this.kycService.approve(verificationId, adminUserId);
+  }
+
+  rejectKyc(verificationId: string, adminUserId: string, reason: string) {
+    return this.kycService.reject(verificationId, adminUserId, reason);
   }
 }

@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 const navItems = [
   { href: '/', label: 'Analytics' },
   { href: '/drivers', label: 'Driver Approvals' },
+  { href: '/kyc', label: 'KYC Reviews' },
   { href: '/pricing', label: 'Pricing Rules' },
   { href: '/disputes', label: 'Disputes & Fraud' }
 ];

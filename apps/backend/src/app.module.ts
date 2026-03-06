@@ -18,6 +18,8 @@ import { RealtimeModule } from './modules/realtime/realtime.module';
 import { PricingModule } from './modules/pricing/pricing.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { HealthModule } from './modules/health/health.module';
+import { DriverOnboardingModule } from './modules/driver-onboarding/driver-onboarding.module';
+import { KycModule } from './modules/kyc/kyc.module';
 
 @Module({
   imports: [
@@ -38,8 +40,10 @@ import { HealthModule } from './modules/health/health.module';
     UsersModule,
     AuthModule,
     DriversModule,
+    DriverOnboardingModule,
     OrdersModule,
     TripsModule,
+    KycModule,
     AdminModule,
     HealthModule
   ]

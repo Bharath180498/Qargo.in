@@ -74,6 +74,63 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum AuthChannel {
+  SMS
+  WHATSAPP
+}
+
+enum AuthSessionStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum OnboardingStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum KycDocType {
+  AADHAAR_FRONT
+  AADHAAR_BACK
+  LICENSE_FRONT
+  LICENSE_BACK
+  RC_FRONT
+  RC_BACK
+  SELFIE
+}
+
+enum KycDocStatus {
+  UPLOADED
+  VERIFIED
+  REJECTED
+}
+
+enum KycVerificationStatus {
+  NOT_STARTED
+  PENDING
+  IN_REVIEW
+  VERIFIED
+  REJECTED
+  INCONCLUSIVE
+}
+
+enum TripOfferStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum VehicleMatchType {
+  EXACT
+  UPGRADE
+}
+
 model User {
   id           String         @id @default(uuid())
   name         String
@@ -87,6 +144,12 @@ model User {
 
   customerOrders Order[]      @relation("CustomerOrders")
   driverProfile  DriverProfile?
+  otpSessions    OtpSession[]
+  authSessions   AuthSession[]
+  onboarding     DriverOnboarding?
+  kycDocuments   KycDocument[]
+  kycVerifications KycVerification[]
+  reviewedKycVerifications KycVerification[] @relation("KycReviewedByAdmin")
 }
 
 model DriverProfile {
@@ -109,6 +172,12 @@ model DriverProfile {
   vehicles           Vehicle[]
   trips              Trip[]
   queuedTrips        Trip[]             @relation("QueuedDriverTrips")
+  pushTokens         DriverPushToken[]
+  payoutAccount      DriverPayoutAccount?
+  tripOffers         TripOffer[]
+  kycDocuments       KycDocument[]
+
+  @@index([availabilityStatus, vehicleType, lastActiveAt])
 }
 
 model Vehicle {
@@ -152,6 +221,8 @@ model Order {
   customer          User         @relation("CustomerOrders", fields: [customerId], references: [id])
   trip              Trip?
   payment           Payment?
+  tripOffers        TripOffer[]
+  dispatchDecisions DispatchDecision[]
 }
 
 model Trip {
@@ -175,6 +246,7 @@ model Trip {
   driver            DriverProfile @relation(fields: [driverId], references: [id])
   queuedDriver      DriverProfile? @relation("QueuedDriverTrips", fields: [queuedDriverId], references: [id])
   rating            Rating?
+  offers            TripOffer[]
 }
 
 model Rating {
@@ -208,4 +280,206 @@ model Payment {
   updatedAt          DateTime       @updatedAt
 
   order              Order          @relation(fields: [orderId], references: [id])
+}
+
+model OtpSession {
+  id            String            @id @default(uuid())
+  userId        String?
+  phone         String
+  role          UserRole?
+  channel       AuthChannel       @default(SMS)
+  otpCode       String
+  status        AuthSessionStatus @default(ACTIVE)
+  attempts      Int               @default(0)
+  expiresAt     DateTime
+  verifiedAt    DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  user          User?             @relation(fields: [userId], references: [id])
+
+  @@index([phone, status, expiresAt])
+}
+
+model AuthSession {
+  id             String            @id @default(uuid())
+  userId         String
+  accessToken    String
+  refreshToken   String?
+  status         AuthSessionStatus @default(ACTIVE)
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  user           User              @relation(fields: [userId], references: [id])
+
+  @@index([userId, status, expiresAt])
+}
+
+model DriverOnboarding {
+  id                String                @id @default(uuid())
+  userId            String                @unique
+  status            OnboardingStatus      @default(NOT_STARTED)
+  fullName          String?
+  phone             String?
+  email             String?
+  city              String?
+  vehicleType       VehicleType?
+  vehicleNumber     String?
+  licenseNumber     String?
+  aadhaarNumber     String?
+  rcNumber          String?
+  accountHolderName String?
+  bankName          String?
+  accountNumber     String?
+  ifscCode          String?
+  upiId             String?
+  submittedAt       DateTime?
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  rejectionReason   String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  user              User                  @relation(fields: [userId], references: [id])
+  documents         KycDocument[]
+  verifications     KycVerification[]
+}
+
+model KycDocument {
+  id                String        @id @default(uuid())
+  userId            String
+  onboardingId      String?
+  driverProfileId   String?
+  type              KycDocType
+  status            KycDocStatus  @default(UPLOADED)
+  fileKey           String
+  fileUrl           String
+  mimeType          String?
+  fileSizeBytes     Int?
+  providerRef       String?
+  metadata          Json?
+  rejectionReason   String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  user              User          @relation(fields: [userId], references: [id])
+  onboarding        DriverOnboarding? @relation(fields: [onboardingId], references: [id])
+  driverProfile     DriverProfile? @relation(fields: [driverProfileId], references: [id])
+
+  @@index([userId, type, status])
+}
+
+model KycVerification {
+  id                String                @id @default(uuid())
+  userId            String
+  onboardingId      String?
+  provider          String
+  providerRef       String?
+  status            KycVerificationStatus @default(PENDING)
+  riskSignals       Json?
+  providerResponse  Json?
+  reviewNotes       String?
+  reviewedByAdminId String?
+  reviewedAt        DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  user              User                  @relation(fields: [userId], references: [id])
+  onboarding        DriverOnboarding?     @relation(fields: [onboardingId], references: [id])
+  reviewedByAdmin   User?                 @relation("KycReviewedByAdmin", fields: [reviewedByAdminId], references: [id])
+
+  @@index([userId, status, createdAt])
+}
+
+model DriverPayoutAccount {
+  id                String      @id @default(uuid())
+  driverId          String      @unique
+  accountHolderName String
+  bankName          String
+  accountNumber     String
+  ifscCode          String
+  upiId             String?
+  isVerified        Boolean     @default(false)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  driver            DriverProfile @relation(fields: [driverId], references: [id])
+}
+
+model DriverPushToken {
+  id             String        @id @default(uuid())
+  driverId       String
+  token          String        @unique
+  platform       String
+  appVersion     String?
+  deviceId       String?
+  isActive       Boolean       @default(true)
+  lastSeenAt     DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  driver         DriverProfile @relation(fields: [driverId], references: [id])
+
+  @@index([driverId, isActive])
+}
+
+model TripOffer {
+  id                String          @id @default(uuid())
+  orderId            String
+  tripId             String?
+  driverId           String
+  status             TripOfferStatus @default(PENDING)
+  expiresAt          DateTime
+  respondedAt        DateTime?
+  score              Float
+  scoreBreakdown     Json?
+  routeEtaMinutes    Int
+  distanceKm         Float?
+  vehicleMatchType   VehicleMatchType @default(EXACT)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  order              Order           @relation(fields: [orderId], references: [id])
+  trip               Trip?           @relation(fields: [tripId], references: [id])
+  driver             DriverProfile   @relation(fields: [driverId], references: [id])
+
+  @@index([driverId, status, expiresAt])
+  @@index([orderId, status, createdAt])
+}
+
+model RouteEtaCache {
+  id              String       @id @default(uuid())
+  originCell      String
+  destinationCell String
+  vehicleType     VehicleType
+  provider        String
+  etaMinutes      Int
+  distanceMeters  Int?
+  expiresAt       DateTime
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([originCell, destinationCell, vehicleType])
+  @@index([originCell, destinationCell, vehicleType, expiresAt])
+}
+
+model DispatchDecision {
+  id               String           @id @default(uuid())
+  orderId          String
+  selectedDriverId String?
+  offerId          String?
+  assignmentMode   String
+  routeEtaMinutes  Int?
+  vehicleMatchType VehicleMatchType?
+  totalScore       Float?
+  decisionPayload  Json?
+  reason           String?
+  createdAt        DateTime         @default(now())
+
+  order            Order            @relation(fields: [orderId], references: [id])
+
+  @@index([orderId, createdAt])
+  @@index([selectedDriverId, createdAt])
 }

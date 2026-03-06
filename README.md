@@ -4,7 +4,8 @@ Full-stack monorepo for a logistics marketplace platform similar to Porter/Uber 
 
 ## Apps
 - `apps/backend`: NestJS API, dispatch engine, realtime tracking, payment/insurance/e-way bill modules
-- `apps/mobile`: Expo React Native app for customer + driver flows
+- `apps/mobile`: Expo React Native customer app
+- `apps/driver`: Expo React Native driver app (OTP auth, onboarding/KYC, jobs, earnings, history, profile)
 - `apps/admin`: Next.js admin dashboard
 - `packages/shared`: shared types/constants
 
@@ -31,6 +32,7 @@ Full-stack monorepo for a logistics marketplace platform similar to Porter/Uber 
    npm run dev:backend
    npm run dev:admin
    npm run dev:mobile
+   npm run dev:driver
    ```
 
 ## Product Roadmap
@@ -47,6 +49,7 @@ See [ROADMAP.md](./ROADMAP.md).
 ## Railway Launch
 - Railway setup docs: [`infra/railway/README.md`](./infra/railway/README.md)
 - Launch runbook: [`infra/railway/LAUNCH_RUNBOOK.md`](./infra/railway/LAUNCH_RUNBOOK.md)
+- Beginner step-by-step: [`FOLLOW_ME_DEPLOY.md`](./FOLLOW_ME_DEPLOY.md)
 - Configure vars:
   ```bash
   npm run railway:configure-vars
@@ -63,5 +66,11 @@ See [ROADMAP.md](./ROADMAP.md).
 - Typeface: Sora + Manrope
 
 ## Notes
-- Payment/GST/Insurance providers are implemented via adapters with mock providers for local development.
+- Payment/GST/Insurance/KYC/Route/Push providers are adapter-based with mock fallback for local development.
+- Dispatch v2 uses Redis geo shortlist + route ETA provider + trip offer lifecycle (accept/reject/expire/re-offer).
+- Backend feature flags:
+  - `AUTH_MODE=otp|mock`
+  - `ROUTE_PROVIDER=google|mock`
+  - `KYC_PROVIDER=idfy|mock`
+  - `PUSH_PROVIDER=fcm|mock`
 - Production integrations should supply real API credentials and webhook handlers.

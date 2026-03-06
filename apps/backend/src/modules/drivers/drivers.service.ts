@@ -2,6 +2,7 @@ import {
   AvailabilityStatus,
   DriverProfile,
   Prisma,
+  TripOfferStatus,
   TripStatus,
   VehicleType,
   VerificationStatus
@@ -252,6 +253,18 @@ export class DriversService implements OnModuleInit {
   }
 
   async getDriverJobs(driverId: string) {
+    await this.prisma.tripOffer.updateMany({
+      where: {
+        driverId,
+        status: TripOfferStatus.PENDING,
+        expiresAt: { lte: new Date() }
+      },
+      data: {
+        status: TripOfferStatus.EXPIRED,
+        respondedAt: new Date()
+      }
+    });
+
     const currentTrip = await this.prisma.trip.findFirst({
       where: {
         driverId,
@@ -278,9 +291,24 @@ export class DriversService implements OnModuleInit {
         })
       : null;
 
+    const pendingOffers = await this.prisma.tripOffer.findMany({
+      where: {
+        driverId,
+        status: TripOfferStatus.PENDING,
+        expiresAt: {
+          gt: new Date()
+        }
+      },
+      include: {
+        order: true
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
     return {
       currentJob: currentTrip,
-      nextJob: nextOrder
+      nextJob: nextOrder,
+      pendingOffers
     };
   }
 

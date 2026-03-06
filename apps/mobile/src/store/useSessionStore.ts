@@ -11,6 +11,7 @@ interface SessionState {
   loading: boolean;
   error?: string;
   login: (role: Role) => Promise<void>;
+  bootstrapCustomerSession: () => Promise<void>;
   logout: () => void;
 }
 
@@ -22,6 +23,15 @@ const roleProfiles: Record<Role, { name: string; phone: string }> = {
 
 export const useSessionStore = create<SessionState>((set) => ({
   loading: false,
+  async bootstrapCustomerSession() {
+    const state = useSessionStore.getState();
+    if (state.user && state.token) {
+      setAuthToken(state.token);
+      return;
+    }
+
+    await state.login('CUSTOMER');
+  },
   async login(role) {
     set({ loading: true, error: undefined });
     const profile = roleProfiles[role];

@@ -47,11 +47,27 @@ interface ComplianceResponse {
   activeTripsMonitored: number;
 }
 
+interface DispatchAnalyticsResponse {
+  window: string;
+  offersCreated: number;
+  offersAccepted: number;
+  offersRejected: number;
+  noOfferDecisions: number;
+  acceptanceRate: number;
+  avgEtaMinutes: number | null;
+}
+
+interface PendingKycResponse {
+  id: string;
+}
+
 export default function DashboardPage() {
   const { data: overview } = useSWR<OverviewResponse>('/admin/overview', fetcher);
   const { data: analytics } = useSWR<TripAnalyticsResponse>('/admin/analytics/trips', fetcher);
   const { data: heatmap } = useSWR<HeatmapResponse>('/admin/analytics/heatmap', fetcher);
   const { data: compliance } = useSWR<ComplianceResponse>('/admin/compliance', fetcher);
+  const { data: dispatch } = useSWR<DispatchAnalyticsResponse>('/admin/analytics/dispatch', fetcher);
+  const { data: pendingKyc } = useSWR<PendingKycResponse[]>('/admin/kyc/pending', fetcher);
 
   const kpis = [
     {
@@ -138,6 +154,34 @@ export default function DashboardPage() {
             <p className="mt-1 font-sora text-2xl text-slate-800">
               {compliance?.activeTripsMonitored ?? '--'}
             </p>
+          </article>
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-3xl border border-orange-200 bg-white p-5 shadow-soft">
+        <h3 className="font-sora text-lg text-brand-accent">Dispatch Health</h3>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <article className="rounded-2xl border border-teal-200 bg-teal-50 p-4">
+            <p className="font-manrope text-xs text-teal-900">Offers Created</p>
+            <p className="mt-1 font-sora text-2xl text-teal-800">{dispatch?.offersCreated ?? '--'}</p>
+          </article>
+          <article className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+            <p className="font-manrope text-xs text-emerald-900">Offer Acceptance Rate</p>
+            <p className="mt-1 font-sora text-2xl text-emerald-800">
+              {dispatch ? `${(dispatch.acceptanceRate * 100).toFixed(1)}%` : '--'}
+            </p>
+          </article>
+          <article className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
+            <p className="font-manrope text-xs text-indigo-900">Avg Route ETA</p>
+            <p className="mt-1 font-sora text-2xl text-indigo-800">
+              {dispatch?.avgEtaMinutes !== null && dispatch?.avgEtaMinutes !== undefined
+                ? `${dispatch.avgEtaMinutes} min`
+                : '--'}
+            </p>
+          </article>
+          <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <p className="font-manrope text-xs text-amber-900">KYC Pending Review</p>
+            <p className="mt-1 font-sora text-2xl text-amber-800">{pendingKyc?.length ?? '--'}</p>
           </article>
         </div>
       </section>

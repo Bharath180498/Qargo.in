@@ -1,12 +1,41 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { AvailabilityStatus, OrderStatus, TripStatus } from '@prisma/client';
+import {
+  AvailabilityStatus,
+  DispatchDecision,
+  Order,
+  OrderStatus,
+  Prisma,
+  TripOfferStatus,
+  TripStatus,
+  VehicleMatchType,
+  VehicleType
+} from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { DriversService } from '../drivers/drivers.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { DISPATCH_WEIGHTS } from '@porter/shared';
 import { RedisService } from '../../common/redis/redis.service';
+import { RouteEtaService } from './route-eta.service';
+
+interface CandidateScore {
+  etaScore: number;
+  ratingScore: number;
+  idleScore: number;
+  vehicleFitScore: number;
+  total: number;
+}
+
+interface DispatchCandidate {
+  driverId: string;
+  driverName: string;
+  availabilityStatus: AvailabilityStatus;
+  vehicleType: VehicleType;
+  vehicleMatchType: VehicleMatchType;
+  distanceKm: number;
+  routeEtaMinutes: number;
+  score: CandidateScore;
+}
 
 @Injectable()
 export class DispatchService {
@@ -16,7 +45,8 @@ export class DispatchService {
     private readonly driversService: DriversService,
     private readonly notificationsService: NotificationsService,
     private readonly realtimeService: RealtimeService,
-    private readonly redisService: RedisService
+    private readonly redisService: RedisService,
+    private readonly routeEtaService: RouteEtaService
   ) {}
 
   private get dispatchRadiusKm() {
@@ -27,49 +57,124 @@ export class DispatchService {
     return this.redisService.getClient();
   }
 
-  private computeDistanceKm(from: { lat: number; lng: number }, to: { lat: number; lng: number }) {
-    const toRadians = (deg: number) => (deg * Math.PI) / 180;
-    const earthRadiusKm = 6371;
-    const dLat = toRadians(to.lat - from.lat);
-    const dLng = toRadians(to.lng - from.lng);
-
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRadians(from.lat)) * Math.cos(toRadians(to.lat)) * Math.sin(dLng / 2) ** 2;
-
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return earthRadiusKm * c;
+  private vehicleRank(vehicleType: VehicleType) {
+    if (vehicleType === VehicleType.THREE_WHEELER) {
+      return 1;
+    }
+    if (vehicleType === VehicleType.MINI_TRUCK) {
+      return 2;
+    }
+    return 3;
   }
 
-  private scoreDriver(input: {
-    distanceKm: number;
+  private vehicleMatchType(orderVehicleType: VehicleType, driverVehicleType: VehicleType) {
+    if (orderVehicleType === driverVehicleType) {
+      return VehicleMatchType.EXACT;
+    }
+
+    return this.vehicleRank(driverVehicleType) > this.vehicleRank(orderVehicleType)
+      ? VehicleMatchType.UPGRADE
+      : null;
+  }
+
+  private scoreCandidate(input: {
+    etaMinutes: number;
     rating: number;
     idleSince?: Date | null;
-    vehicleMatch: boolean;
-    radiusKm: number;
-  }) {
-    const proximity = Math.max(0, 1 - input.distanceKm / input.radiusKm);
-    const rating = Math.min(1, Math.max(0, input.rating / 5));
-
+    vehicleMatchType: VehicleMatchType;
+  }): CandidateScore {
+    const etaScore = Math.max(0, Math.min(1, 1 - input.etaMinutes / 35));
+    const ratingScore = Math.max(0, Math.min(1, input.rating / 5));
     const idleHours = input.idleSince
       ? (Date.now() - new Date(input.idleSince).getTime()) / (60 * 60 * 1000)
       : 0;
-    const idleTime = Math.min(1, idleHours / 4);
-    const vehicle = input.vehicleMatch ? 1 : 0;
+    const idleScore = Math.max(0, Math.min(1, idleHours / 4));
+    const vehicleFitScore = input.vehicleMatchType === VehicleMatchType.EXACT ? 1 : 0.75;
 
     const total =
-      DISPATCH_WEIGHTS.proximity * proximity +
-      DISPATCH_WEIGHTS.rating * rating +
-      DISPATCH_WEIGHTS.idleTime * idleTime +
-      DISPATCH_WEIGHTS.vehicleMatch * vehicle;
+      0.55 * etaScore + 0.2 * ratingScore + 0.15 * idleScore + 0.1 * vehicleFitScore;
 
     return {
-      proximity,
-      rating,
-      idleTime,
-      vehicle,
-      total
+      etaScore: Number(etaScore.toFixed(4)),
+      ratingScore: Number(ratingScore.toFixed(4)),
+      idleScore: Number(idleScore.toFixed(4)),
+      vehicleFitScore,
+      total: Number(total.toFixed(4))
     };
+  }
+
+  private async buildCandidates(order: Order): Promise<DispatchCandidate[]> {
+    const nearbyDrivers = await this.driversService.findNearby({
+      lat: order.pickupLat,
+      lng: order.pickupLng,
+      radiusKm: this.dispatchRadiusKm,
+      includeBusy: true
+    });
+
+    const candidates = await Promise.all(
+      nearbyDrivers.map(async (driver) => {
+        const matchType = this.vehicleMatchType(order.vehicleType, driver.vehicleType);
+        if (!matchType) {
+          return null;
+        }
+
+        const lat = driver.currentLat ?? order.pickupLat;
+        const lng = driver.currentLng ?? order.pickupLng;
+        const eta = await this.routeEtaService.getEta({
+          origin: { lat, lng },
+          destination: { lat: order.pickupLat, lng: order.pickupLng },
+          vehicleType: driver.vehicleType
+        });
+
+        const score = this.scoreCandidate({
+          etaMinutes: eta.etaMinutes,
+          rating: driver.user.rating,
+          idleSince: driver.idleSince,
+          vehicleMatchType: matchType
+        });
+
+        return {
+          driverId: driver.id,
+          driverName: driver.user.name,
+          availabilityStatus: driver.availabilityFromGeo,
+          vehicleType: driver.vehicleType,
+          vehicleMatchType: matchType,
+          distanceKm: Number((driver.distanceKm ?? eta.distanceKm).toFixed(2)),
+          routeEtaMinutes: eta.etaMinutes,
+          score
+        } satisfies DispatchCandidate;
+      })
+    );
+
+    return candidates
+      .filter((candidate): candidate is DispatchCandidate => candidate !== null)
+      .sort((a, b) => b.score.total - a.score.total);
+  }
+
+  private async logDecision(data: {
+    orderId: string;
+    selectedDriverId?: string | null;
+    offerId?: string | null;
+    assignmentMode: string;
+    routeEtaMinutes?: number | null;
+    vehicleMatchType?: VehicleMatchType | null;
+    totalScore?: number | null;
+    decisionPayload?: Record<string, unknown>;
+    reason?: string;
+  }) {
+    return this.prisma.dispatchDecision.create({
+      data: {
+        orderId: data.orderId,
+        selectedDriverId: data.selectedDriverId ?? null,
+        offerId: data.offerId ?? null,
+        assignmentMode: data.assignmentMode,
+        routeEtaMinutes: data.routeEtaMinutes ?? null,
+        vehicleMatchType: data.vehicleMatchType ?? null,
+        totalScore: data.totalScore ?? null,
+        decisionPayload: data.decisionPayload as Prisma.InputJsonValue | undefined,
+        reason: data.reason
+      }
+    });
   }
 
   async previewCandidates(orderId: string) {
@@ -78,38 +183,100 @@ export class DispatchService {
       throw new NotFoundException('Order not found');
     }
 
-    const nearbyDrivers = await this.driversService.findNearby({
-      lat: order.pickupLat,
-      lng: order.pickupLng,
-      radiusKm: this.dispatchRadiusKm,
-      vehicleType: order.vehicleType,
-      includeBusy: true
+    return this.buildCandidates(order);
+  }
+
+  private async createOffer(input: {
+    order: Order;
+    candidate: DispatchCandidate;
+    mode: 'NEW_ASSIGNMENT' | 'REASSIGNMENT' | 'QUEUE_OFFER';
+    linkedTripId?: string;
+  }) {
+    const expiresAt = new Date(Date.now() + 20 * 1000);
+    const offer = await this.prisma.tripOffer.create({
+      data: {
+        orderId: input.order.id,
+        tripId: input.linkedTripId,
+        driverId: input.candidate.driverId,
+        status: TripOfferStatus.PENDING,
+        expiresAt,
+        score: input.candidate.score.total,
+        scoreBreakdown: input.candidate.score as unknown as Prisma.InputJsonValue,
+        routeEtaMinutes: input.candidate.routeEtaMinutes,
+        distanceKm: input.candidate.distanceKm,
+        vehicleMatchType: input.candidate.vehicleMatchType
+      }
     });
 
-    return nearbyDrivers
-      .map((driver) => {
-        const score = this.scoreDriver({
-          distanceKm: driver.distanceKm,
-          rating: driver.user.rating,
-          idleSince: driver.idleSince,
-          vehicleMatch: driver.vehicleType === order.vehicleType,
-          radiusKm: this.dispatchRadiusKm
-        });
+    await this.logDecision({
+      orderId: input.order.id,
+      selectedDriverId: input.candidate.driverId,
+      offerId: offer.id,
+      assignmentMode: input.mode,
+      routeEtaMinutes: input.candidate.routeEtaMinutes,
+      vehicleMatchType: input.candidate.vehicleMatchType,
+      totalScore: input.candidate.score.total,
+      decisionPayload: {
+        score: input.candidate.score,
+        distanceKm: input.candidate.distanceKm,
+        driverName: input.candidate.driverName
+      },
+      reason: 'Offer created'
+    });
 
-        return {
-          driverId: driver.id,
-          driverName: driver.user.name,
-          availabilityStatus: driver.availabilityFromGeo,
-          distanceKm: driver.distanceKm,
-          score
-        };
-      })
-      .sort((a, b) => b.score.total - a.score.total);
+    await this.notificationsService.notifyDriver(input.candidate.driverId, 'trip_offer_new', {
+      offerId: offer.id,
+      orderId: input.order.id,
+      routeEtaMinutes: input.candidate.routeEtaMinutes,
+      vehicleMatchType: input.candidate.vehicleMatchType
+    });
+
+    this.realtimeService.emitDriverUpdate(input.candidate.driverId, 'trip:offer:new', {
+      offerId: offer.id,
+      orderId: input.order.id,
+      expiresAt: expiresAt.toISOString(),
+      routeEtaMinutes: input.candidate.routeEtaMinutes,
+      vehicleMatchType: input.candidate.vehicleMatchType
+    });
+
+    await this.prisma.order.update({
+      where: { id: input.order.id },
+      data: {
+        status: OrderStatus.MATCHING
+      }
+    });
+
+    return offer;
+  }
+
+  private async createNextOffer(order: Order, excludedDriverIds: string[]) {
+    const candidates = await this.buildCandidates(order);
+    const candidate = candidates.find(
+      (item) =>
+        item.availabilityStatus === AvailabilityStatus.ONLINE &&
+        !excludedDriverIds.includes(item.driverId)
+    );
+
+    if (!candidate) {
+      await this.logDecision({
+        orderId: order.id,
+        assignmentMode: 'NO_OFFER',
+        reason: 'No qualified online candidates available'
+      });
+      return null;
+    }
+
+    return this.createOffer({
+      order,
+      candidate,
+      mode: excludedDriverIds.length > 0 ? 'REASSIGNMENT' : 'NEW_ASSIGNMENT'
+    });
   }
 
   async assignOrder(orderId: string) {
-    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    await this.processExpiredOffers();
 
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) {
       throw new NotFoundException('Order not found');
     }
@@ -125,87 +292,105 @@ export class DispatchService {
       };
     }
 
-    const candidates = await this.previewCandidates(order.id);
-
-    if (candidates.length === 0) {
+    const offer = await this.createNextOffer(order, []);
+    if (!offer) {
       return {
         orderId: order.id,
         assigned: false,
-        reason: 'NO_DRIVERS_FOUND'
+        reason: 'NO_DRIVERS_FOUND',
+        mode: 'SEARCHING'
       };
     }
 
-    const onlineCandidate = candidates.find(
-      (candidate) => candidate.availabilityStatus === AvailabilityStatus.ONLINE
-    );
+    return {
+      orderId: order.id,
+      assigned: false,
+      mode: 'OFFER_SENT',
+      offerId: offer.id,
+      routeEtaMinutes: offer.routeEtaMinutes,
+      vehicleMatchType: offer.vehicleMatchType
+    };
+  }
 
-    if (onlineCandidate) {
-      const trip = await this.prisma.$transaction(async (tx) => {
-        await tx.driverProfile.update({
-          where: { id: onlineCandidate.driverId },
-          data: {
-            availabilityStatus: AvailabilityStatus.BUSY,
-            idleSince: null
-          }
-        });
+  private async expireOfferIfNeeded(offerId: string) {
+    const offer = await this.prisma.tripOffer.findUnique({
+      where: { id: offerId }
+    });
 
-        await tx.order.update({
-          where: { id: order.id },
-          data: {
-            status: OrderStatus.ASSIGNED
-          }
-        });
+    if (!offer) {
+      throw new NotFoundException('Offer not found');
+    }
 
-        return tx.trip.create({
-          data: {
-            orderId: order.id,
-            driverId: onlineCandidate.driverId,
-            etaMinutes: Math.max(5, Math.round((onlineCandidate.distanceKm / 25) * 60)),
-            status: TripStatus.ASSIGNED
-          }
-        });
+    if (offer.status === TripOfferStatus.PENDING && offer.expiresAt.getTime() <= Date.now()) {
+      return this.prisma.tripOffer.update({
+        where: { id: offer.id },
+        data: {
+          status: TripOfferStatus.EXPIRED,
+          respondedAt: new Date()
+        }
       });
+    }
 
-      await this.notificationsService.notifyCustomer(order.customerId, 'driver_assigned', {
-        orderId: order.id,
-        driverId: onlineCandidate.driverId,
-        etaMinutes: trip.etaMinutes
+    return offer;
+  }
+
+  async acceptOffer(offerId: string, driverId: string) {
+    const existingOffer = await this.expireOfferIfNeeded(offerId);
+    if (existingOffer.status !== TripOfferStatus.PENDING) {
+      throw new NotFoundException('Offer is no longer active');
+    }
+
+    if (existingOffer.driverId !== driverId) {
+      throw new NotFoundException('Offer does not belong to this driver');
+    }
+
+    const order = await this.prisma.order.findUnique({ where: { id: existingOffer.orderId } });
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const activeTrip = await this.prisma.trip.findUnique({
+      where: { orderId: order.id }
+    });
+
+    if (activeTrip) {
+      await this.prisma.tripOffer.update({
+        where: { id: existingOffer.id },
+        data: {
+          status: TripOfferStatus.CANCELLED,
+          respondedAt: new Date()
+        }
       });
-
-      await this.notificationsService.notifyDriver(onlineCandidate.driverId, 'new_job_assigned', {
-        orderId: order.id,
-        tripId: trip.id
-      });
-
-      this.realtimeService.emitTripUpdate(order.id, 'trip:assigned', {
-        tripId: trip.id,
-        driverId: onlineCandidate.driverId,
-        etaMinutes: trip.etaMinutes
-      });
-
       return {
-        orderId: order.id,
-        assigned: true,
-        mode: 'IMMEDIATE',
-        tripId: trip.id,
-        driverId: onlineCandidate.driverId
+        accepted: false,
+        reason: 'ORDER_ALREADY_ASSIGNED',
+        tripId: activeTrip.id
       };
     }
 
-    const busyCandidate = candidates[0];
+    const result = await this.prisma.$transaction(async (tx) => {
+      await tx.tripOffer.updateMany({
+        where: {
+          orderId: order.id,
+          status: TripOfferStatus.PENDING,
+          id: {
+            not: existingOffer.id
+          }
+        },
+        data: {
+          status: TripOfferStatus.CANCELLED,
+          respondedAt: new Date()
+        }
+      });
 
-    const nextKey = `driver:${busyCandidate.driverId}:next-order`;
-    const hasQueuedOrder = await this.redis.get(nextKey);
+      const acceptedOffer = await tx.tripOffer.update({
+        where: { id: existingOffer.id },
+        data: {
+          status: TripOfferStatus.ACCEPTED,
+          respondedAt: new Date()
+        }
+      });
 
-    if (hasQueuedOrder) {
-      return {
-        orderId: order.id,
-        assigned: false,
-        reason: 'DRIVER_ALREADY_HAS_QUEUED_JOB'
-      };
-    }
-
-    const queuedTrip = await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id: order.id },
         data: {
@@ -213,33 +398,238 @@ export class DispatchService {
         }
       });
 
-      return tx.trip.create({
+      await tx.driverProfile.update({
+        where: { id: driverId },
+        data: {
+          availabilityStatus: AvailabilityStatus.BUSY,
+          idleSince: null
+        }
+      });
+
+      const trip = await tx.trip.create({
         data: {
           orderId: order.id,
-          driverId: busyCandidate.driverId,
+          driverId,
+          etaMinutes: acceptedOffer.routeEtaMinutes,
           status: TripStatus.ASSIGNED
         }
       });
+
+      return {
+        acceptedOffer,
+        trip
+      };
     });
 
-    await this.redis.set(nextKey, order.id, 'EX', 45 * 60);
-
-    await this.notificationsService.notifyDriver(busyCandidate.driverId, 'next_job_queued', {
-      orderId: order.id,
-      tripId: queuedTrip.id
+    const hasCurrentTrip = await this.prisma.trip.count({
+      where: {
+        driverId,
+        status: {
+          in: [
+            TripStatus.DRIVER_EN_ROUTE,
+            TripStatus.ARRIVED_PICKUP,
+            TripStatus.LOADING,
+            TripStatus.IN_TRANSIT
+          ]
+        }
+      }
     });
 
-    this.realtimeService.emitDriverUpdate(busyCandidate.driverId, 'driver:next-job', {
+    if (hasCurrentTrip > 0) {
+      await this.redis.set(`driver:${driverId}:next-order`, order.id, 'EX', 45 * 60);
+    }
+
+    await this.logDecision({
       orderId: order.id,
-      tripId: queuedTrip.id
+      selectedDriverId: driverId,
+      offerId: existingOffer.id,
+      assignmentMode: hasCurrentTrip > 0 ? 'QUEUE_ACCEPTED' : 'OFFER_ACCEPTED',
+      routeEtaMinutes: existingOffer.routeEtaMinutes,
+      vehicleMatchType: existingOffer.vehicleMatchType,
+      totalScore: existingOffer.score,
+      reason: 'Driver accepted offer'
+    });
+
+    await this.notificationsService.notifyCustomer(order.customerId, 'driver_assigned', {
+      orderId: order.id,
+      driverId,
+      tripId: result.trip.id,
+      etaMinutes: result.trip.etaMinutes
+    });
+
+    this.realtimeService.emitTripUpdate(order.id, 'trip:assigned', {
+      tripId: result.trip.id,
+      driverId,
+      etaMinutes: result.trip.etaMinutes
+    });
+
+    this.realtimeService.emitDriverUpdate(driverId, 'trip:offer:accepted', {
+      offerId: existingOffer.id,
+      orderId: order.id,
+      tripId: result.trip.id
     });
 
     return {
-      orderId: order.id,
-      assigned: true,
-      mode: 'QUEUED',
-      tripId: queuedTrip.id,
-      driverId: busyCandidate.driverId
+      accepted: true,
+      tripId: result.trip.id,
+      orderId: order.id
+    };
+  }
+
+  async rejectOffer(offerId: string, driverId: string) {
+    const existingOffer = await this.expireOfferIfNeeded(offerId);
+    if (existingOffer.driverId !== driverId) {
+      throw new NotFoundException('Offer does not belong to this driver');
+    }
+
+    if (existingOffer.status !== TripOfferStatus.PENDING) {
+      return {
+        rejected: false,
+        reason: 'OFFER_NOT_PENDING'
+      };
+    }
+
+    await this.prisma.tripOffer.update({
+      where: { id: existingOffer.id },
+      data: {
+        status: TripOfferStatus.REJECTED,
+        respondedAt: new Date()
+      }
+    });
+
+    await this.logDecision({
+      orderId: existingOffer.orderId,
+      selectedDriverId: driverId,
+      offerId: existingOffer.id,
+      assignmentMode: 'OFFER_REJECTED',
+      routeEtaMinutes: existingOffer.routeEtaMinutes,
+      vehicleMatchType: existingOffer.vehicleMatchType,
+      totalScore: existingOffer.score,
+      reason: 'Driver rejected offer'
+    });
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: existingOffer.orderId }
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const completedTrip = await this.prisma.trip.findUnique({
+      where: { orderId: order.id }
+    });
+
+    if (completedTrip) {
+      return {
+        rejected: true,
+        reoffered: false,
+        reason: 'ALREADY_ASSIGNED'
+      };
+    }
+
+    const previousOfferDrivers = await this.prisma.tripOffer.findMany({
+      where: {
+        orderId: order.id
+      },
+      select: {
+        driverId: true
+      }
+    });
+
+    const nextOffer = await this.createNextOffer(
+      order,
+      previousOfferDrivers.map((entry) => entry.driverId)
+    );
+
+    return {
+      rejected: true,
+      reoffered: Boolean(nextOffer),
+      nextOfferId: nextOffer?.id
+    };
+  }
+
+  async processExpiredOffers() {
+    const expired = await this.prisma.tripOffer.findMany({
+      where: {
+        status: TripOfferStatus.PENDING,
+        expiresAt: {
+          lte: new Date()
+        }
+      },
+      orderBy: { expiresAt: 'asc' },
+      take: 200
+    });
+
+    if (expired.length === 0) {
+      return {
+        processed: 0,
+        reoffered: 0
+      };
+    }
+
+    const byOrder = new Map<string, string[]>();
+    for (const offer of expired) {
+      const existing = byOrder.get(offer.orderId) ?? [];
+      existing.push(offer.id);
+      byOrder.set(offer.orderId, existing);
+    }
+
+    let reoffered = 0;
+
+    for (const [orderId, offerIds] of byOrder.entries()) {
+      await this.prisma.tripOffer.updateMany({
+        where: {
+          id: {
+            in: offerIds
+          },
+          status: TripOfferStatus.PENDING
+        },
+        data: {
+          status: TripOfferStatus.EXPIRED,
+          respondedAt: new Date()
+        }
+      });
+
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId }
+      });
+
+      if (
+        !order ||
+        order.status === OrderStatus.CANCELLED ||
+        order.status === OrderStatus.DELIVERED
+      ) {
+        continue;
+      }
+
+      const existingTrip = await this.prisma.trip.findUnique({
+        where: { orderId: order.id }
+      });
+
+      if (existingTrip) {
+        continue;
+      }
+
+      const usedDriverIds = await this.prisma.tripOffer.findMany({
+        where: { orderId: order.id },
+        select: {
+          driverId: true
+        }
+      });
+
+      const next = await this.createNextOffer(
+        order,
+        usedDriverIds.map((entry) => entry.driverId)
+      );
+      if (next) {
+        reoffered += 1;
+      }
+    }
+
+    return {
+      processed: expired.length,
+      reoffered
     };
   }
 
@@ -257,7 +647,7 @@ export class DispatchService {
 
     const currentTrip = await this.prisma.trip.findUnique({
       where: { id: currentTripId },
-      include: { order: true, driver: true }
+      include: { order: true }
     });
 
     if (!currentTrip) {
@@ -269,27 +659,44 @@ export class DispatchService {
         status: {
           in: [OrderStatus.CREATED, OrderStatus.MATCHING]
         },
-        vehicleType: currentTrip.order.vehicleType,
         id: {
           not: currentTrip.orderId
         }
       },
-      take: 50,
+      take: 80,
       orderBy: { createdAt: 'asc' }
     });
 
-    const scored = openOrders
-      .map((order) => ({
-        order,
-        distanceKm: this.computeDistanceKm(
-          { lat: currentTrip.order.dropLat, lng: currentTrip.order.dropLng },
-          { lat: order.pickupLat, lng: order.pickupLng }
-        )
-      }))
+    const candidates = openOrders
+      .map((order) => {
+        const matchType = this.vehicleMatchType(currentTrip.order.vehicleType, order.vehicleType);
+        if (!matchType) {
+          return null;
+        }
+
+        const dLat = order.pickupLat - currentTrip.order.dropLat;
+        const dLng = order.pickupLng - currentTrip.order.dropLng;
+        const distanceKm = Math.sqrt(dLat * dLat + dLng * dLng) * 111;
+
+        return {
+          order,
+          matchType,
+          distanceKm
+        };
+      })
+      .filter(
+        (
+          value
+        ): value is {
+          order: Order;
+          matchType: VehicleMatchType;
+          distanceKm: number;
+        } => Boolean(value)
+      )
       .filter((entry) => entry.distanceKm <= 10)
       .sort((a, b) => a.distanceKm - b.distanceKm);
 
-    const next = scored[0];
+    const next = candidates[0];
     if (!next) {
       return {
         queued: false,
@@ -297,35 +704,37 @@ export class DispatchService {
       };
     }
 
-    const trip = await this.prisma.$transaction(async (tx) => {
-      await tx.order.update({
-        where: { id: next.order.id },
-        data: {
-          status: OrderStatus.ASSIGNED
-        }
-      });
-
-      return tx.trip.create({
-        data: {
-          orderId: next.order.id,
-          driverId,
-          status: TripStatus.ASSIGNED
-        }
-      });
+    const offer = await this.prisma.tripOffer.create({
+      data: {
+        orderId: next.order.id,
+        tripId: currentTrip.id,
+        driverId,
+        status: TripOfferStatus.PENDING,
+        expiresAt: new Date(Date.now() + 30 * 1000),
+        score: Number((1 / (next.distanceKm + 1)).toFixed(4)),
+        routeEtaMinutes: Math.max(2, Math.round((next.distanceKm / 25) * 60)),
+        distanceKm: Number(next.distanceKm.toFixed(2)),
+        vehicleMatchType: next.matchType
+      }
     });
 
-    await this.redis.set(key, next.order.id, 'EX', 45 * 60);
-
-    await this.notificationsService.notifyDriver(driverId, 'next_job_queued', {
+    await this.notificationsService.notifyDriver(driverId, 'next_job_offer', {
+      offerId: offer.id,
       orderId: next.order.id,
-      tripId: trip.id
+      distanceKm: offer.distanceKm
+    });
+
+    this.realtimeService.emitDriverUpdate(driverId, 'driver:queue-offer', {
+      offerId: offer.id,
+      orderId: next.order.id,
+      expiresAt: offer.expiresAt.toISOString()
     });
 
     return {
-      queued: true,
-      orderId: next.order.id,
-      tripId: trip.id,
-      distanceKm: Number(next.distanceKm.toFixed(2))
+      queued: false,
+      offered: true,
+      offerId: offer.id,
+      orderId: next.order.id
     };
   }
 
@@ -366,7 +775,7 @@ export class DispatchService {
 
     await this.redis.del(key);
 
-    this.realtimeService.emitDriverUpdate(driverId, 'driver:next-job-activated', {
+    this.realtimeService.emitDriverUpdate(driverId, 'driver:queue-activated', {
       tripId: updated.id,
       orderId
     });
@@ -412,5 +821,29 @@ export class DispatchService {
       processed: scheduledOrders.length,
       results
     };
+  }
+
+  async getDriverPendingOffers(driverId: string) {
+    await this.processExpiredOffers();
+
+    const pending = await this.prisma.tripOffer.findMany({
+      where: {
+        driverId,
+        status: TripOfferStatus.PENDING
+      },
+      include: {
+        order: true
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    return pending.filter((offer) => offer.expiresAt.getTime() > Date.now());
+  }
+
+  async getDispatchDecisions(orderId: string): Promise<DispatchDecision[]> {
+    return this.prisma.dispatchDecision.findMany({
+      where: { orderId },
+      orderBy: { createdAt: 'asc' }
+    });
   }
 }

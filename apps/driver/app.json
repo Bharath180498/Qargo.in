@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "SamaanGaadi Driver",
+    "slug": "samaangaadi-driver",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#FFF8F1"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.samaangaadi.driver",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "SamaanGaadi Driver uses your location for trip navigation and live tracking.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "SamaanGaadi Driver needs background location while you are online for dispatch and safety."
+      }
+    },
+    "android": {
+      "package": "com.samaangaadi.driver",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
+      ]
+    },
+    "extra": {
+      "apiBaseUrl": "https://backend-production-0ee70.up.railway.app/api"
+    }
+  }
+}

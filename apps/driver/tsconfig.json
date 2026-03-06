@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "typeRoots": ["./node_modules/@types", "../mobile/node_modules/@types", "../../node_modules/@types"],
+    "moduleSuffixes": [".native", ".ios", ".android", ""]
+  },
+  "include": ["**/*.ts", "**/*.tsx", "index.js"]
+}

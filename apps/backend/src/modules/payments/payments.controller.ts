@@ -16,4 +16,9 @@ export class PaymentsController {
   confirm(@Body() payload: ConfirmPaymentDto) {
     return this.paymentsService.confirm(payload);
   }
+
+  @Post('webhooks/razorpay')
+  webhook(@Body() payload: { event: string; providerRef?: string; success?: boolean }) {
+    return this.paymentsService.handleRazorpayWebhook(payload);
+  }
 }

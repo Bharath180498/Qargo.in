@@ -1,0 +1,65 @@
+project_name = "samaan-gaadi"
+environment  = "prod"
+aws_region   = "ap-south-1"
+
+# Networking
+vpc_cidr                = "10.40.0.0/16"
+availability_zone_count = 2
+
+# Public endpoints
+public_base_url      = "https://app.samaangaadi.in"
+acm_certificate_arn  = "arn:aws:acm:ap-south-1:123456789012:certificate/replace-me"
+route53_zone_id      = "Z0123456789ABCDEF"
+route53_record_name  = "app.samaangaadi.in"
+
+# ECS sizing
+backend_cpu          = 1024
+backend_memory       = 2048
+backend_desired_count = 2
+backend_min_count    = 2
+backend_max_count    = 10
+
+admin_cpu            = 512
+admin_memory         = 1024
+admin_desired_count  = 2
+admin_min_count      = 2
+admin_max_count      = 6
+
+# Database
+db_name                          = "porter"
+db_username                      = "porter"
+db_password                      = "replace-with-strong-password"
+db_instance_class                = "db.t4g.medium"
+db_allocated_storage             = 100
+db_max_allocated_storage         = 300
+db_multi_az                      = true
+db_deletion_protection           = true
+db_backup_retention_days         = 14
+db_performance_insights_enabled  = true
+
+# Redis
+redis_node_type                   = "cache.t4g.small"
+redis_num_cache_clusters          = 2
+redis_transit_encryption_enabled  = true
+
+# App settings
+jwt_secret               = "replace-with-long-random-secret"
+jwt_expires_in           = "7d"
+dispatch_radius_km       = 8
+waiting_rate_per_minute  = 3
+base_fare_per_km         = 14
+
+# External providers (replace before launch)
+fcm_server_key      = "replace-me"
+razorpay_key_id     = "replace-me"
+razorpay_key_secret = "replace-me"
+stripe_secret_key   = "replace-me"
+gstn_api_url        = "https://sandbox.gstn.example"
+eway_bill_api_url   = "https://sandbox.ewaybill.example"
+
+# Alerting
+alert_email = "alerts@samaangaadi.in"
+
+# Image tags (updated automatically by release script)
+backend_image_tag = "latest"
+admin_image_tag   = "latest"

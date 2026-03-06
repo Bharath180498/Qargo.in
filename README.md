@@ -36,6 +36,26 @@ Full-stack monorepo for a logistics marketplace platform similar to Porter/Uber 
 ## Product Roadmap
 See [ROADMAP.md](./ROADMAP.md).
 
+## AWS Production Launch
+- Infra: Terraform in [`infra/aws/terraform`](./infra/aws/terraform)
+- One-command release:
+  ```bash
+  ./infra/aws/scripts/release.sh --region ap-south-1
+  ```
+- Full runbook: [`infra/aws/docs/LAUNCH_RUNBOOK.md`](./infra/aws/docs/LAUNCH_RUNBOOK.md)
+
+## Railway Launch
+- Railway setup docs: [`infra/railway/README.md`](./infra/railway/README.md)
+- Launch runbook: [`infra/railway/LAUNCH_RUNBOOK.md`](./infra/railway/LAUNCH_RUNBOOK.md)
+- Configure vars:
+  ```bash
+  npm run railway:configure-vars
+  ```
+- Deploy both services:
+  ```bash
+  npm run railway:deploy
+  ```
+
 ## Branding Direction
 - Primary: `#F97316` (cargo orange)
 - Secondary: `#0F766E` (teal)

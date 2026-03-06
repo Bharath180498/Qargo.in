@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import { Alert, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { io } from 'socket.io-client';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import api, { REALTIME_BASE_URL } from '../../services/api';
 import { useCustomerStore } from '../../store/useCustomerStore';
 import type { RootStackParamList } from '../../types/navigation';
+import MapView, { Marker, Polyline } from '../../components/maps';
 
 interface DriverPoint {
   lat: number;
@@ -14,6 +14,22 @@ interface DriverPoint {
 }
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerTracking'>;
+
+function vehicleLabel(vehicleType?: string) {
+  if (!vehicleType) {
+    return 'Pending';
+  }
+
+  if (vehicleType === 'THREE_WHEELER') {
+    return '3 Wheeler';
+  }
+
+  if (vehicleType === 'MINI_TRUCK') {
+    return 'Mini Truck';
+  }
+
+  return 'Truck';
+}
 
 export function CustomerTrackingScreen({ navigation }: Props) {
   const refreshOrder = useCustomerStore((state) => state.refreshOrder);
@@ -103,7 +119,19 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     longitude: order?.dropLng ?? 77.6046
   };
 
-  const liveDriver = points.at(-1);
+  const assignedDriver = order?.trip?.driver;
+  const assignedDriverUser = assignedDriver?.user;
+  const assignedDriverVehicle = assignedDriver?.vehicles?.[0];
+  const assignedDriverStaticPoint =
+    typeof assignedDriver?.currentLat === 'number' && typeof assignedDriver?.currentLng === 'number'
+      ? {
+          lat: Number(assignedDriver.currentLat),
+          lng: Number(assignedDriver.currentLng),
+          timestamp: new Date().toISOString()
+        }
+      : undefined;
+  const liveDriver = points.at(-1) ?? assignedDriverStaticPoint;
+  const driverInitial = assignedDriverUser?.name ? assignedDriverUser.name[0]?.toUpperCase() : 'D';
 
   const region = useMemo(
     () => ({
@@ -131,6 +159,28 @@ export function CustomerTrackingScreen({ navigation }: Props) {
       Alert.alert('Thanks', 'Driver rating submitted.');
     } catch {
       Alert.alert('Could not submit rating', 'Please try once again.');
+    }
+  };
+
+  const callDriver = async () => {
+    const phone = assignedDriverUser?.phone;
+    if (!phone) {
+      Alert.alert('Driver contact unavailable', 'Phone number is not available yet.');
+      return;
+    }
+
+    const telUrl = `tel:${phone.replace(/\s+/g, '')}`;
+
+    try {
+      const canOpen = await Linking.canOpenURL(telUrl);
+      if (!canOpen) {
+        Alert.alert('Cannot place call', 'This device cannot place phone calls right now.');
+        return;
+      }
+
+      await Linking.openURL(telUrl);
+    } catch {
+      Alert.alert('Cannot place call', 'Please try again after a moment.');
     }
   };
 
@@ -197,6 +247,58 @@ export function CustomerTrackingScreen({ navigation }: Props) {
               <Text style={styles.infoValue}>{order?.payment?.status ?? 'PENDING'}</Text>
             </View>
           </View>
+
+          {assignedDriver ? (
+            <View style={styles.driverCard}>
+              <View style={styles.driverCardHead}>
+                <View style={styles.driverAvatar}>
+                  <Text style={styles.driverAvatarText}>{driverInitial}</Text>
+                </View>
+                <View style={styles.driverHeadCopy}>
+                  <Text style={styles.driverName}>{assignedDriverUser?.name ?? 'Driver assigned'}</Text>
+                  <Text style={styles.driverMetaLine}>
+                    {typeof assignedDriverUser?.rating === 'number'
+                      ? `${assignedDriverUser.rating.toFixed(1)} rating`
+                      : 'Rating pending'}
+                    {typeof assignedDriver?._count?.trips === 'number'
+                      ? ` • ${assignedDriver._count.trips} trips`
+                      : ''}
+                  </Text>
+                </View>
+                <Pressable style={styles.callButton} onPress={() => void callDriver()}>
+                  <Text style={styles.callButtonText}>Call</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.driverInfoGrid}>
+                <View style={styles.driverInfoItem}>
+                  <Text style={styles.driverInfoLabel}>Vehicle</Text>
+                  <Text style={styles.driverInfoValue}>
+                    {vehicleLabel(assignedDriverVehicle?.type ?? assignedDriver?.vehicleType)}
+                  </Text>
+                </View>
+                <View style={styles.driverInfoItem}>
+                  <Text style={styles.driverInfoLabel}>Vehicle No.</Text>
+                  <Text style={styles.driverInfoValue}>{assignedDriver?.vehicleNumber ?? 'Pending'}</Text>
+                </View>
+                <View style={styles.driverInfoItem}>
+                  <Text style={styles.driverInfoLabel}>Phone</Text>
+                  <Text style={styles.driverInfoValue}>{assignedDriverUser?.phone ?? 'Pending'}</Text>
+                </View>
+                <View style={styles.driverInfoItem}>
+                  <Text style={styles.driverInfoLabel}>License</Text>
+                  <Text style={styles.driverInfoValue}>{assignedDriver?.licenseNumber ?? 'Pending'}</Text>
+                </View>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.driverWaitingCard}>
+              <Text style={styles.driverWaitingTitle}>Looking for your driver</Text>
+              <Text style={styles.driverWaitingSubtitle}>
+                Driver profile, vehicle number, and contact will show up as soon as assignment is done.
+              </Text>
+            </View>
+          )}
 
           {ewayDisplay ? (
             <View style={styles.ewayCard}>
@@ -336,6 +438,99 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     fontFamily: 'Manrope_700Bold',
     fontSize: 13
+  },
+  driverCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D1FAE5',
+    backgroundColor: '#F0FDFA',
+    padding: 10,
+    gap: 10
+  },
+  driverCardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10
+  },
+  driverAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#CCFBF1',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  driverAvatarText: {
+    color: '#0F766E',
+    fontFamily: 'Sora_700Bold',
+    fontSize: 16
+  },
+  driverHeadCopy: {
+    flex: 1
+  },
+  driverName: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 14
+  },
+  driverMetaLine: {
+    color: '#0F766E',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12,
+    marginTop: 1
+  },
+  callButton: {
+    borderRadius: 999,
+    backgroundColor: '#0F766E',
+    paddingHorizontal: 12,
+    paddingVertical: 6
+  },
+  callButtonText: {
+    color: '#ECFEFF',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  driverInfoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
+  },
+  driverInfoItem: {
+    width: '48%',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#CCFBF1',
+    backgroundColor: '#FFFFFF',
+    padding: 8
+  },
+  driverInfoLabel: {
+    color: '#64748B',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 11
+  },
+  driverInfoValue: {
+    marginTop: 2,
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  driverWaitingCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    padding: 10
+  },
+  driverWaitingTitle: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13
+  },
+  driverWaitingSubtitle: {
+    marginTop: 2,
+    color: '#64748B',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12
   },
   ewayCard: {
     borderRadius: 12,

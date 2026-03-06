@@ -5,6 +5,26 @@ import appConfig from '../../app.json';
 const configuredApiBaseUrlRaw = (appConfig as { expo?: { extra?: { apiBaseUrl?: unknown } } }).expo
   ?.extra?.apiBaseUrl;
 
+function normalizeConfiguredApiBaseUrl(value: string): string {
+  let next = value.trim();
+
+  if (!next) {
+    return next;
+  }
+
+  // Handle malformed inputs like "http:192.168.0.118:3001/api".
+  if (/^https?:[^/]/i.test(next)) {
+    next = next.replace(/^https?:/i, (match) => `${match}//`);
+  }
+
+  // Allow shorthand host:port/api and default to http.
+  if (!/^[a-z]+:\/\//i.test(next)) {
+    next = `http://${next}`;
+  }
+
+  return next;
+}
+
 function isPrivateIpv4(host: string): boolean {
   const parts = host.split('.');
   if (parts.length !== 4 || parts.some((part) => Number.isNaN(Number(part)))) {
@@ -31,7 +51,9 @@ function extractHostFromExpoRuntime(): string | undefined {
 function resolveApiBaseUrl(): string {
   const runtimeHost = extractHostFromExpoRuntime();
   const configuredApiBaseUrl =
-    typeof configuredApiBaseUrlRaw === 'string' ? configuredApiBaseUrlRaw.trim() : undefined;
+    typeof configuredApiBaseUrlRaw === 'string'
+      ? normalizeConfiguredApiBaseUrl(configuredApiBaseUrlRaw)
+      : undefined;
 
   if (configuredApiBaseUrl) {
     try {
@@ -53,7 +75,7 @@ function resolveApiBaseUrl(): string {
 
       return configuredApiBaseUrl;
     } catch {
-      return configuredApiBaseUrl;
+      // Ignore invalid configured URL and fall back to runtime host.
     }
   }
 

@@ -1,0 +1,75 @@
+name: Deploy AWS Prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Optional release tag (defaults to short SHA)"
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+      TF_STATE_LOCK_TABLE: ${{ vars.TF_STATE_LOCK_TABLE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Write Terraform backend config
+        working-directory: infra/aws/terraform
+        run: |
+          cat > backend.hcl <<EOF
+          bucket         = "${TF_STATE_BUCKET}"
+          key            = "${TF_STATE_KEY}"
+          region         = "${AWS_REGION}"
+          dynamodb_table = "${TF_STATE_LOCK_TABLE}"
+          encrypt        = true
+          EOF
+
+      - name: Write Terraform variables
+        working-directory: infra/aws/terraform
+        run: |
+          cat > terraform.tfvars <<'EOF'
+          ${{ secrets.TFVARS_PROD }}
+          EOF
+
+      - name: Terraform Init
+        run: terraform -chdir=infra/aws/terraform init -backend-config=backend.hcl -reconfigure
+
+      - name: Deploy Release
+        run: |
+          TAG="${{ github.event.inputs.image_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="$(echo "${GITHUB_SHA}" | cut -c1-12)"
+          fi
+          ./infra/aws/scripts/release.sh --region "$AWS_REGION" --tag "$TAG"

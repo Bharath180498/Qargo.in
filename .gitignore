@@ -15,3 +15,15 @@ build
 .idea
 apps/backend/prisma/dev.db
 apps/backend/prisma/dev.db-journal
+
+# Terraform local state/artifacts
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+infra/aws/terraform/terraform.tfvars
+infra/aws/terraform/backend.hcl

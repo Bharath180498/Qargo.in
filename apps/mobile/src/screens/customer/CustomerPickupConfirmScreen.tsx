@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Alert,
+  Easing,
+  Keyboard,
+  KeyboardEvent,
+  Platform,
   Pressable,
   SafeAreaView,
   StyleSheet,
@@ -10,10 +15,10 @@ import {
   View
 } from 'react-native';
 import * as Location from 'expo-location';
-import MapView, { Marker, Region } from 'react-native-maps';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types/navigation';
 import { type RoutePoint, useCustomerStore } from '../../store/useCustomerStore';
+import MapView, { type MapViewRef, Marker, type Region } from '../../components/maps';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerPickupConfirm'>;
 
@@ -163,7 +168,8 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
   const fetchQuotes = useCustomerStore((state) => state.fetchQuotes);
   const estimateLoading = useCustomerStore((state) => state.estimateLoading);
 
-  const mapRef = useRef<MapView | null>(null);
+  const mapRef = useRef<MapViewRef | null>(null);
+  const keyboardLift = useRef(new Animated.Value(0)).current;
 
   const [mapRegion, setMapRegion] = useState<Region>(FALLBACK_REGION);
   const [step, setStep] = useState<SelectionStep>('PICKUP');
@@ -178,9 +184,56 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
   const [searchMessage, setSearchMessage] = useState<string | undefined>();
   const [initializing, setInitializing] = useState(true);
   const [confirming, setConfirming] = useState(false);
+  const [keyboardRaised, setKeyboardRaised] = useState(false);
 
   const activeQuery = step === 'PICKUP' ? pickupQuery : dropQuery;
   const activeSearchSelected = step === 'PICKUP' ? pickupSearchSelected : dropSearchSelected;
+  const hudOpacity = keyboardLift.interpolate({
+    inputRange: [0, 120],
+    outputRange: [1, 0.2],
+    extrapolate: 'clamp'
+  });
+  const sheetTranslateY = keyboardLift.interpolate({
+    inputRange: [0, 260],
+    outputRange: [0, -260],
+    extrapolate: 'clamp'
+  });
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const moveSheet = (event: KeyboardEvent) => {
+      const keyboardHeight = event.endCoordinates?.height ?? 0;
+      const target = Math.min(Math.max(keyboardHeight - (Platform.OS === 'ios' ? 24 : 10), 0), 260);
+
+      setKeyboardRaised(target > 0);
+      Animated.timing(keyboardLift, {
+        toValue: target,
+        duration: event.duration ?? 220,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true
+      }).start();
+    };
+
+    const resetSheet = (event?: KeyboardEvent) => {
+      setKeyboardRaised(false);
+      Animated.timing(keyboardLift, {
+        toValue: 0,
+        duration: event?.duration ?? 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true
+      }).start();
+    };
+
+    const showSubscription = Keyboard.addListener(showEvent, moveSheet);
+    const hideSubscription = Keyboard.addListener(hideEvent, resetSheet);
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [keyboardLift]);
 
   useEffect(() => {
     const initialize = async () => {
@@ -315,6 +368,8 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
   };
 
   const onSelectSuggestion = (suggestion: AddressSuggestion) => {
+    Keyboard.dismiss();
+
     const point: RoutePoint = {
       address: suggestion.address,
       lat: suggestion.lat,
@@ -514,7 +569,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
           {dropPoint ? <Marker coordinate={{ latitude: dropPoint.lat, longitude: dropPoint.lng }} pinColor="#F97316" /> : null}
         </MapView>
 
-        <View style={styles.topControls}>
+        <Animated.View style={[styles.topControls, { opacity: hudOpacity }]}>
           <Pressable style={styles.circleButton} onPress={onBack}>
             <Text style={styles.circleButtonText}>{'<'}</Text>
           </Pressable>
@@ -533,13 +588,15 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
               <Text style={[styles.stepToggleText, step === 'DROP' && styles.stepToggleTextActive]}>Drop</Text>
             </Pressable>
           </View>
-        </View>
+        </Animated.View>
 
-        <View style={styles.centerPin}>
+        <Animated.View style={[styles.centerPin, { opacity: hudOpacity }]}>
           <View style={[styles.centerPinDot, step === 'DROP' && styles.centerPinDotDrop]} />
-        </View>
+        </Animated.View>
 
-        <View style={styles.sheet}>
+        <Animated.View
+          style={[styles.sheet, keyboardRaised && styles.sheetRaised, { transform: [{ translateY: sheetTranslateY }] }]}
+        >
           <View style={styles.sheetHandle} />
           <Text style={styles.sheetTitle}>{activeTitle}</Text>
           <Text style={styles.sheetSubtitle}>{activeSubtitle}</Text>
@@ -553,6 +610,9 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
               autoCorrect={false}
               autoCapitalize="words"
               placeholderTextColor="#94A3B8"
+              returnKeyType="search"
+              blurOnSubmit={false}
+              onFocus={() => setKeyboardRaised(true)}
               style={styles.searchInput}
             />
 
@@ -560,7 +620,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
             {searchMessage ? <Text style={styles.searchMessage}>{searchMessage}</Text> : null}
 
             {suggestions.length > 0 ? (
-              <View style={styles.suggestionsList}>
+              <View style={[styles.suggestionsList, keyboardRaised && styles.suggestionsListRaised]}>
                 {suggestions.map((item) => (
                   <Pressable key={item.id} style={styles.suggestionItem} onPress={() => onSelectSuggestion(item)}>
                     <Text style={styles.suggestionTitle} numberOfLines={1}>
@@ -598,7 +658,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
               <Text style={styles.confirmText}>{activeButtonText}</Text>
             )}
           </Pressable>
-        </View>
+        </Animated.View>
       </View>
     </SafeAreaView>
   );
@@ -704,6 +764,13 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
     gap: 10
   },
+  sheetRaised: {
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: -8 },
+    elevation: 10
+  },
   sheetHandle: {
     alignSelf: 'center',
     width: 42,
@@ -759,6 +826,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     maxHeight: 160,
     overflow: 'hidden'
+  },
+  suggestionsListRaised: {
+    maxHeight: 220
   },
   suggestionItem: {
     paddingHorizontal: 12,

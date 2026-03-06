@@ -7,6 +7,12 @@
 4. Open Expo Go on iPhone and scan the QR from terminal.
 5. In [app.json](/Users/bharath/Desktop/Porter/apps/mobile/app.json), set `expo.extra.apiBaseUrl` to your Mac LAN IP (example `http://192.168.0.118:3001/api`).
 
+## If Expo Go says "Taking longer than expected to open"
+1. Stop all Metro servers.
+2. Start fresh: `npm run dev:mobile:fresh`
+3. If it still hangs, use tunnel mode: `npm run dev:mobile:tunnel`
+4. Ensure iPhone and Mac are on same Wi-Fi, and disable VPN / iCloud Private Relay during local testing.
+
 ## Role Flows
 - Customer:
   - Bharat-style booking flow with dynamic map selection for pick-up and drop

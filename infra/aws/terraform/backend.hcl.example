@@ -1,0 +1,5 @@
+bucket         = "samaangaadi-terraform-state-prod"
+key            = "core/terraform.tfstate"
+region         = "ap-south-1"
+dynamodb_table = "samaangaadi-terraform-locks"
+encrypt        = true

@@ -7,6 +7,7 @@ import {
   Text,
   View
 } from 'react-native';
+import axios from 'axios';
 import { useSessionStore } from '../../store/useSessionStore';
 import { API_BASE_URL } from '../../services/api';
 import { colors, radius, spacing, typography } from '../../theme';
@@ -25,11 +26,21 @@ export function RoleSelectionScreen() {
   const onSelectRole = async (role: 'CUSTOMER' | 'DRIVER') => {
     try {
       await login(role);
-    } catch {
-      Alert.alert(
-        'Unable to continue',
-        `Backend is unreachable at ${API_BASE_URL}. Make sure API server, Postgres, and Redis are running.`
-      );
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response) {
+        const status = error.response.status;
+        const detail =
+          typeof error.response.data === 'object' &&
+          error.response.data !== null &&
+          'message' in error.response.data
+            ? String((error.response.data as { message?: unknown }).message ?? 'Request failed')
+            : 'Request failed';
+
+        Alert.alert('Backend error', `API responded with ${status}: ${detail}`);
+        return;
+      }
+
+      Alert.alert('Unable to continue', `Backend is unreachable at ${API_BASE_URL}.`);
     }
   };
 

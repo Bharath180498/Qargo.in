@@ -176,7 +176,27 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        trip: true,
+        trip: {
+          include: {
+            driver: {
+              include: {
+                user: true,
+                vehicles: true,
+                _count: {
+                  select: {
+                    trips: true
+                  }
+                }
+              }
+            },
+            queuedDriver: {
+              include: {
+                user: true
+              }
+            },
+            rating: true
+          }
+        },
         payment: true,
         customer: true
       }

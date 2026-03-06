@@ -11,10 +11,10 @@ import {
 } from 'react-native';
 import type { InsurancePlan, VehicleType } from '@porter/shared';
 import { VEHICLE_UI_META } from '@porter/shared';
-import MapView, { Marker, Polyline } from 'react-native-maps';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types/navigation';
 import { type PaymentMethod, useCustomerStore } from '../../store/useCustomerStore';
+import MapView, { Marker, Polyline } from '../../components/maps';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerTripSelect'>;
 
@@ -49,6 +49,22 @@ function getVehicleSymbol(vehicleType: VehicleType) {
   return 'TR';
 }
 
+function formatPromoTag(input: { cheapest: boolean; fastest: boolean; rating?: number }) {
+  if (input.cheapest) {
+    return { label: 'Best price', tone: 'PRICE' as const };
+  }
+
+  if (input.fastest) {
+    return { label: 'Fast pickup', tone: 'SPEED' as const };
+  }
+
+  if (typeof input.rating === 'number' && input.rating >= 4.7) {
+    return { label: `Top rated ${input.rating.toFixed(1)}`, tone: 'RATING' as const };
+  }
+
+  return { label: 'Standard fare', tone: 'DEFAULT' as const };
+}
+
 export function CustomerTripSelectScreen({ navigation }: Props) {
   const {
     quotes,
@@ -71,6 +87,20 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
 
   const hasRoute = Boolean(draftPickup && draftDrop);
   const selectedMeta = selectedVehicle ? VEHICLE_UI_META[selectedVehicle.vehicleType] : null;
+  const cheapestTotal = useMemo(() => {
+    if (quotes.length === 0) {
+      return undefined;
+    }
+
+    return Math.min(...quotes.map((item) => item.pricing.total));
+  }, [quotes]);
+  const fastestEta = useMemo(() => {
+    if (quotes.length === 0) {
+      return undefined;
+    }
+
+    return Math.min(...quotes.map((item) => item.etaMinutes));
+  }, [quotes]);
 
   const region = useMemo(
     () => ({
@@ -207,6 +237,23 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
             {quotes.map((quote) => {
               const meta = VEHICLE_UI_META[quote.vehicleType as VehicleType];
               const active = selectedVehicle?.vehicleType === quote.vehicleType;
+              const rawPrice =
+                quote.pricing.multiplier > 0 && quote.pricing.multiplier < 1
+                  ? quote.pricing.total / quote.pricing.multiplier
+                  : null;
+              const badge = formatPromoTag({
+                cheapest: cheapestTotal !== undefined && quote.pricing.total === cheapestTotal,
+                fastest: fastestEta !== undefined && quote.etaMinutes === fastestEta,
+                rating: quote.topDriver?.rating
+              });
+              const badgeStyle =
+                badge.tone === 'PRICE'
+                  ? styles.badgePrice
+                  : badge.tone === 'SPEED'
+                    ? styles.badgeSpeed
+                    : badge.tone === 'RATING'
+                      ? styles.badgeRating
+                      : styles.badgeDefault;
 
               return (
                 <Pressable
@@ -214,19 +261,45 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
                   style={[styles.tripCard, active && styles.tripCardActive]}
                   onPress={() => selectVehicle(quote.vehicleType as VehicleType)}
                 >
-                  <View style={styles.tripLeftIcon}>
+                  <View style={[styles.tripLeftIcon, { borderColor: meta.accent, backgroundColor: `${meta.accent}18` }]}>
                     <Text style={styles.tripLeftIconText}>
                       {getVehicleSymbol(quote.vehicleType as VehicleType)}
                     </Text>
                   </View>
                   <View style={styles.tripMain}>
                     <View style={styles.tripTopRow}>
-                      <Text style={styles.tripTitle}>{meta.label}</Text>
-                      <Text style={styles.tripPrice}>INR {quote.pricing.total.toFixed(0)}</Text>
+                      <View style={styles.tripTitleGroup}>
+                        <Text style={styles.tripTitle}>{meta.label}</Text>
+                        <Text style={styles.tripSubtitle}>{meta.subtitle}</Text>
+                      </View>
+
+                      <View style={styles.tripPriceGroup}>
+                        <Text style={styles.tripPrice}>INR {quote.pricing.total.toFixed(0)}</Text>
+                        {rawPrice ? (
+                          <Text style={styles.tripPriceStruck}>INR {Math.round(rawPrice).toFixed(0)}</Text>
+                        ) : null}
+                      </View>
                     </View>
-                    <Text style={styles.tripEta}>ETA {quote.etaMinutes} min</Text>
-                    <Text style={styles.tripMeta}>
-                      {quote.availableDrivers} drivers nearby · Rating x{quote.pricing.multiplier.toFixed(2)}
+
+                    <View style={styles.tripMetaRow}>
+                      <Text style={styles.tripEta}>Pickup in {quote.etaMinutes} min</Text>
+                      <Text style={styles.tripMetaDot}>•</Text>
+                      <Text style={styles.tripCapacity}>{meta.capacity}</Text>
+                    </View>
+
+                    <View style={styles.tripBadgesRow}>
+                      <View style={[styles.tripBadge, badgeStyle]}>
+                        <Text style={styles.tripBadgeText}>{badge.label}</Text>
+                      </View>
+                      <Text style={styles.tripMetaSecondary}>
+                        {quote.availableDrivers} nearby drivers · Multiplier x{quote.pricing.multiplier.toFixed(2)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={[styles.selectionPill, active && styles.selectionPillActive]}>
+                    <Text style={[styles.selectionPillText, active && styles.selectionPillTextActive]}>
+                      {active ? 'Selected' : 'Select'}
                     </Text>
                   </View>
                 </Pressable>
@@ -438,19 +511,26 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#FFFFFF',
     padding: 10,
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 10
   },
   tripCardActive: {
     borderColor: '#0F766E',
-    backgroundColor: '#ECFDF5'
+    backgroundColor: '#ECFDF5',
+    shadowColor: '#0F766E',
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 4
   },
   tripLeftIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#CCFBF1'
@@ -462,32 +542,113 @@ const styles = StyleSheet.create({
   },
   tripMain: {
     flex: 1,
-    gap: 2
+    gap: 5
   },
   tripTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center'
+    alignItems: 'flex-start'
+  },
+  tripTitleGroup: {
+    flex: 1,
+    paddingRight: 8
   },
   tripTitle: {
     color: '#0F172A',
     fontFamily: 'Manrope_700Bold',
-    fontSize: 18
+    fontSize: 17
+  },
+  tripSubtitle: {
+    color: '#64748B',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12,
+    marginTop: 1
+  },
+  tripPriceGroup: {
+    alignItems: 'flex-end'
   },
   tripPrice: {
     color: '#0F172A',
     fontFamily: 'Sora_700Bold',
-    fontSize: 16
+    fontSize: 15
+  },
+  tripPriceStruck: {
+    color: '#94A3B8',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 11,
+    textDecorationLine: 'line-through'
+  },
+  tripMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
   },
   tripEta: {
     color: '#334155',
-    fontFamily: 'Manrope_500Medium',
-    fontSize: 13
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
   },
-  tripMeta: {
+  tripMetaDot: {
+    color: '#94A3B8',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 11
+  },
+  tripCapacity: {
+    color: '#334155',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12
+  },
+  tripBadgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  tripBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4
+  },
+  badgePrice: {
+    backgroundColor: '#DCFCE7'
+  },
+  badgeSpeed: {
+    backgroundColor: '#DBEAFE'
+  },
+  badgeRating: {
+    backgroundColor: '#FEF3C7'
+  },
+  badgeDefault: {
+    backgroundColor: '#E2E8F0'
+  },
+  tripBadgeText: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 10
+  },
+  tripMetaSecondary: {
     color: '#64748B',
     fontFamily: 'Manrope_500Medium',
-    fontSize: 11
+    fontSize: 10
+  },
+  selectionPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 8,
+    paddingVertical: 5
+  },
+  selectionPillActive: {
+    borderColor: '#0F766E',
+    backgroundColor: '#CCFBF1'
+  },
+  selectionPillText: {
+    color: '#64748B',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 10
+  },
+  selectionPillTextActive: {
+    color: '#0F766E'
   },
   emptyState: {
     borderRadius: 12,

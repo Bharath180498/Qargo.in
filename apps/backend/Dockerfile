@@ -18,4 +18,4 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/backend/dist ./apps/backend/dist
 COPY --from=build /app/apps/backend/package.json ./apps/backend/package.json
 COPY --from=build /app/apps/backend/prisma ./apps/backend/prisma
-CMD ["node", "apps/backend/dist/main.js"]
+CMD ["node", "apps/backend/dist/src/main.js"]

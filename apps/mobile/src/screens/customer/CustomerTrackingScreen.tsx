@@ -442,23 +442,50 @@ export function CustomerTrackingScreen({ navigation }: Props) {
       : `${order?.payment?.status ?? 'Pending payment'} - tap to pay or change method`;
   const isCancelledOrder = order?.status === 'CANCELLED';
   const showCompletionSheet = order?.status === 'DELIVERED' && !summaryClosed && !isCancelledOrder;
-  const cancellationRemainingSeconds = useMemo(() => {
-    if (!order?.createdAt) {
-      return 0;
+  const cancellationState = useMemo(() => {
+    if (!activeOrderId || !order) {
+      return {
+        canCancel: false,
+        remainingSeconds: 0,
+        hint: '',
+        mode: 'NONE' as 'NONE' | 'PRE_MATCH' | 'POST_MATCH'
+      };
     }
 
-    const createdAtMs = new Date(order.createdAt).getTime();
-    if (Number.isNaN(createdAtMs)) {
-      return 0;
+    const status = String(order.status ?? '');
+    if (status === 'CREATED' || status === 'MATCHING') {
+      return {
+        canCancel: true,
+        remainingSeconds: 0,
+        hint: 'Cancel available until a driver is matched.',
+        mode: 'PRE_MATCH' as const
+      };
     }
 
-    const remainingMs = createdAtMs + 60 * 1000 - clockNow;
-    return Math.max(0, Math.ceil(remainingMs / 1000));
-  }, [clockNow, order?.createdAt]);
-  const canCancelBooking =
-    Boolean(activeOrderId) &&
-    ['CREATED', 'MATCHING'].includes(String(order?.status ?? '')) &&
-    cancellationRemainingSeconds > 0;
+    if (status === 'ASSIGNED' && order.trip?.createdAt) {
+      const matchedAtMs = new Date(order.trip.createdAt).getTime();
+      if (!Number.isNaN(matchedAtMs)) {
+        const remainingSeconds = Math.max(0, Math.ceil((matchedAtMs + 60 * 1000 - clockNow) / 1000));
+        return {
+          canCancel: remainingSeconds > 0,
+          remainingSeconds,
+          hint:
+            remainingSeconds > 0
+              ? `Cancel available for ${remainingSeconds}s after match.`
+              : 'Cancellation window closed after driver match.',
+          mode: 'POST_MATCH' as const
+        };
+      }
+    }
+
+    return {
+      canCancel: false,
+      remainingSeconds: 0,
+      hint: 'Cancellation is no longer available at this trip stage.',
+      mode: 'NONE' as const
+    };
+  }, [activeOrderId, clockNow, order]);
+  const canCancelBooking = cancellationState.canCancel;
   const routeDestinationLabel =
     normalizedTripStatus === 'IN_TRANSIT' || normalizedTripStatus === 'COMPLETED' ? 'drop' : 'pickup';
   const routeDestinationLat =
@@ -649,7 +676,12 @@ export function CustomerTrackingScreen({ navigation }: Props) {
       return;
     }
 
-    Alert.alert('Cancel booking?', 'You can cancel only within 1 minute while matching.', [
+    const cancelPolicyMessage =
+      cancellationState.mode === 'POST_MATCH'
+        ? 'You can cancel only within 1 minute after driver assignment.'
+        : 'You can cancel anytime until a driver is matched.';
+
+    Alert.alert('Cancel booking?', cancelPolicyMessage, [
       { text: 'Keep booking', style: 'cancel' },
       {
         text: 'Cancel booking',
@@ -769,150 +801,170 @@ export function CustomerTrackingScreen({ navigation }: Props) {
         </View>
 
         <View style={styles.sheet}>
-          <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>Live Delivery</Text>
-            <View style={styles.statusPill}>
-              <Text style={styles.statusPillText}>{order?.status ?? 'CREATED'}</Text>
-            </View>
-          </View>
-
-          <View style={styles.matchingCard}>
-            <Text style={styles.matchingTitle}>{matchingHeadline}</Text>
-            <Text style={styles.matchingSubtitle}>{matchingSubtitle}</Text>
-            <View style={styles.matchingTrack}>
-              <View style={[styles.matchingFill, { width: `${Math.round(matchingProgress * 100)}%` }]} />
-            </View>
-            {hasAssignedDriver ? <Text style={styles.driverDistanceText}>{driverDistanceLabel}</Text> : null}
-            {canCancelBooking ? (
-              <View style={styles.cancelRow}>
-                <Text style={styles.cancelHint}>Cancel available for {cancellationRemainingSeconds}s</Text>
-                <Pressable style={styles.cancelButton} onPress={() => void cancelBooking()}>
-                  <Text style={styles.cancelButtonText}>Cancel booking</Text>
-                </Pressable>
+          <ScrollView
+            style={styles.sheetScroll}
+            contentContainerStyle={styles.sheetScrollContent}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Live Delivery</Text>
+              <View style={styles.statusPill}>
+                <Text style={styles.statusPillText}>{order?.status ?? 'CREATED'}</Text>
               </View>
-            ) : null}
-          </View>
-
-          <View style={styles.infoGrid}>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>Trip status</Text>
-              <Text style={styles.infoValue}>{order?.trip?.status ?? 'MATCHING'}</Text>
             </View>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>ETA</Text>
-              <Text style={styles.infoValue}>{order?.trip?.etaMinutes ?? 15} min</Text>
-            </View>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>Waiting charge</Text>
-              <Text style={styles.infoValue}>INR {Number(order?.waitingCharge ?? 0).toFixed(0)}</Text>
-            </View>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>Payment</Text>
-              <Text style={styles.infoValue}>{paymentStatusDisplay}</Text>
-            </View>
-          </View>
 
-          <Pressable style={styles.paymentAction} onPress={() => navigation.navigate('CustomerPayment')}>
-            <Text style={styles.paymentActionTitle}>Payment</Text>
-            <Text style={styles.paymentActionSubtitle}>{paymentSubtitle}</Text>
-          </Pressable>
+            <View style={styles.screenNavRow}>
+              <Pressable style={styles.screenNavButton} onPress={() => navigation.navigate('CustomerHome')}>
+                <Text style={styles.screenNavText}>Home</Text>
+              </Pressable>
+              <Pressable style={styles.screenNavButton} onPress={() => navigation.navigate('CustomerRides')}>
+                <Text style={styles.screenNavText}>Rides</Text>
+              </Pressable>
+              <Pressable style={styles.screenNavButton} onPress={() => navigation.navigate('CustomerProfile')}>
+                <Text style={styles.screenNavText}>Profile</Text>
+              </Pressable>
+            </View>
 
-          <View style={styles.stageCard}>
-            <Text style={styles.stageTitle}>Trip stage map</Text>
-            <View style={styles.stageRow}>
-              {TRIP_STAGES.map((stage, index) => {
-                const completed = currentStageIndex >= index;
-                const active = currentStageIndex === index;
+            <View style={styles.matchingCard}>
+              <Text style={styles.matchingTitle}>{matchingHeadline}</Text>
+              <Text style={styles.matchingSubtitle}>{matchingSubtitle}</Text>
+              <View style={styles.matchingTrack}>
+                <View style={[styles.matchingFill, { width: `${Math.round(matchingProgress * 100)}%` }]} />
+              </View>
+              {hasAssignedDriver ? <Text style={styles.driverDistanceText}>{driverDistanceLabel}</Text> : null}
+              {canCancelBooking ? (
+                <View style={styles.cancelRow}>
+                  <Text style={styles.cancelHint}>{cancellationState.hint}</Text>
+                  <Pressable style={styles.cancelButton} onPress={() => void cancelBooking()}>
+                    <Text style={styles.cancelButtonText}>Cancel booking</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
 
-                return (
-                  <View key={stage.key} style={styles.stageItem}>
-                    <View style={styles.stageNodeWrap}>
-                      <View style={[styles.stageNode, completed && styles.stageNodeDone, active && styles.stageNodeActive]} />
-                      {index < TRIP_STAGES.length - 1 ? (
-                        <View style={[styles.stageLine, currentStageIndex > index && styles.stageLineDone]} />
-                      ) : null}
+            <View style={styles.infoGrid}>
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>Trip status</Text>
+                <Text style={styles.infoValue}>{order?.trip?.status ?? 'MATCHING'}</Text>
+              </View>
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>ETA</Text>
+                <Text style={styles.infoValue}>{order?.trip?.etaMinutes ?? 15} min</Text>
+              </View>
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>Waiting charge</Text>
+                <Text style={styles.infoValue}>INR {Number(order?.waitingCharge ?? 0).toFixed(0)}</Text>
+              </View>
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>Payment</Text>
+                <Text style={styles.infoValue}>{paymentStatusDisplay}</Text>
+              </View>
+            </View>
+
+            <Pressable style={styles.paymentAction} onPress={() => navigation.navigate('CustomerPayment')}>
+              <Text style={styles.paymentActionTitle}>Payment</Text>
+              <Text style={styles.paymentActionSubtitle}>{paymentSubtitle}</Text>
+            </Pressable>
+
+            <View style={styles.stageCard}>
+              <Text style={styles.stageTitle}>Trip stage map</Text>
+              <View style={styles.stageRow}>
+                {TRIP_STAGES.map((stage, index) => {
+                  const completed = currentStageIndex >= index;
+                  const active = currentStageIndex === index;
+
+                  return (
+                    <View key={stage.key} style={styles.stageItem}>
+                      <View style={styles.stageNodeWrap}>
+                        <View
+                          style={[styles.stageNode, completed && styles.stageNodeDone, active && styles.stageNodeActive]}
+                        />
+                        {index < TRIP_STAGES.length - 1 ? (
+                          <View style={[styles.stageLine, currentStageIndex > index && styles.stageLineDone]} />
+                        ) : null}
+                      </View>
+                      <Text style={[styles.stageLabel, completed && styles.stageLabelDone]}>{stage.label}</Text>
                     </View>
-                    <Text style={[styles.stageLabel, completed && styles.stageLabelDone]}>{stage.label}</Text>
+                  );
+                })}
+              </View>
+            </View>
+
+            {assignedDriver ? (
+              <View style={styles.driverCard}>
+                <View style={styles.driverCardHead}>
+                  <View style={styles.driverAvatar}>
+                    <Text style={styles.driverAvatarText}>{driverInitial}</Text>
                   </View>
-                );
-              })}
-            </View>
-          </View>
+                  <View style={styles.driverHeadCopy}>
+                    <Text style={styles.driverName}>{assignedDriverUser?.name ?? 'Driver assigned'}</Text>
+                    <Text style={styles.driverMetaLine}>
+                      {typeof assignedDriverUser?.rating === 'number'
+                        ? `${assignedDriverUser.rating.toFixed(1)} rating`
+                        : 'Rating pending'}
+                      {typeof assignedDriver?._count?.trips === 'number'
+                        ? ` • ${assignedDriver._count.trips} trips`
+                        : ''}
+                    </Text>
+                  </View>
+                  <Pressable style={styles.callButton} onPress={() => void callDriver()}>
+                    <Text style={styles.callButtonText}>Call</Text>
+                  </Pressable>
+                </View>
 
-          {assignedDriver ? (
-            <View style={styles.driverCard}>
-              <View style={styles.driverCardHead}>
-                <View style={styles.driverAvatar}>
-                  <Text style={styles.driverAvatarText}>{driverInitial}</Text>
-                </View>
-                <View style={styles.driverHeadCopy}>
-                  <Text style={styles.driverName}>{assignedDriverUser?.name ?? 'Driver assigned'}</Text>
-                  <Text style={styles.driverMetaLine}>
-                    {typeof assignedDriverUser?.rating === 'number'
-                      ? `${assignedDriverUser.rating.toFixed(1)} rating`
-                      : 'Rating pending'}
-                    {typeof assignedDriver?._count?.trips === 'number'
-                      ? ` • ${assignedDriver._count.trips} trips`
-                      : ''}
-                  </Text>
-                </View>
-                <Pressable style={styles.callButton} onPress={() => void callDriver()}>
-                  <Text style={styles.callButtonText}>Call</Text>
-                </Pressable>
-              </View>
-
-              <View style={styles.driverInfoGrid}>
-                <View style={styles.driverInfoItem}>
-                  <Text style={styles.driverInfoLabel}>Vehicle</Text>
-                  <Text style={styles.driverInfoValue}>
-                    {vehicleLabel(assignedDriverVehicle?.type ?? assignedDriver?.vehicleType)}
-                  </Text>
-                </View>
-                <View style={styles.driverInfoItem}>
-                  <Text style={styles.driverInfoLabel}>Vehicle No.</Text>
-                  <Text style={styles.driverInfoValue}>{assignedDriver?.vehicleNumber ?? 'Pending'}</Text>
-                </View>
-                <View style={styles.driverInfoItem}>
-                  <Text style={styles.driverInfoLabel}>Phone</Text>
-                  <Text style={styles.driverInfoValue}>{assignedDriverUser?.phone ?? 'Pending'}</Text>
-                </View>
-                <View style={styles.driverInfoItem}>
-                  <Text style={styles.driverInfoLabel}>License</Text>
-                  <Text style={styles.driverInfoValue}>{assignedDriver?.licenseNumber ?? 'Pending'}</Text>
+                <View style={styles.driverInfoGrid}>
+                  <View style={styles.driverInfoItem}>
+                    <Text style={styles.driverInfoLabel}>Vehicle</Text>
+                    <Text style={styles.driverInfoValue}>
+                      {vehicleLabel(assignedDriverVehicle?.type ?? assignedDriver?.vehicleType)}
+                    </Text>
+                  </View>
+                  <View style={styles.driverInfoItem}>
+                    <Text style={styles.driverInfoLabel}>Vehicle No.</Text>
+                    <Text style={styles.driverInfoValue}>{assignedDriver?.vehicleNumber ?? 'Pending'}</Text>
+                  </View>
+                  <View style={styles.driverInfoItem}>
+                    <Text style={styles.driverInfoLabel}>Phone</Text>
+                    <Text style={styles.driverInfoValue}>{assignedDriverUser?.phone ?? 'Pending'}</Text>
+                  </View>
+                  <View style={styles.driverInfoItem}>
+                    <Text style={styles.driverInfoLabel}>License</Text>
+                    <Text style={styles.driverInfoValue}>{assignedDriver?.licenseNumber ?? 'Pending'}</Text>
+                  </View>
                 </View>
               </View>
-            </View>
-          ) : (
-            <View style={styles.driverWaitingCard}>
-              <Text style={styles.driverWaitingTitle}>Looking for your driver</Text>
-              <Text style={styles.driverWaitingSubtitle}>
-                Driver profile, vehicle number, and contact will show up as soon as assignment is done.
-              </Text>
-            </View>
-          )}
-
-          {ewayDisplay ? (
-            <View style={styles.ewayCard}>
-              <Text style={styles.ewayLabel}>GST e-way bill</Text>
-              <Text style={styles.ewayNumber}>{ewayDisplay}</Text>
-            </View>
-          ) : null}
-
-          <Text style={styles.timelineTitle}>Trip timeline</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.timelineRow}>
-            {timeline.map((event) => (
-              <View key={`${event.key}-${event.timestamp}`} style={styles.timelineItem}>
-                <Text style={styles.timelineStatus}>{event.status}</Text>
-                <Text style={styles.timelineTime}>
-                  {new Date(event.timestamp).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })}
+            ) : (
+              <View style={styles.driverWaitingCard}>
+                <Text style={styles.driverWaitingTitle}>Looking for your driver</Text>
+                <Text style={styles.driverWaitingSubtitle}>
+                  Driver profile, vehicle number, and contact will show up as soon as assignment is done.
                 </Text>
               </View>
-            ))}
-          </ScrollView>
+            )}
 
+            {ewayDisplay ? (
+              <View style={styles.ewayCard}>
+                <Text style={styles.ewayLabel}>GST e-way bill</Text>
+                <Text style={styles.ewayNumber}>{ewayDisplay}</Text>
+              </View>
+            ) : null}
+
+            <Text style={styles.timelineTitle}>Trip timeline</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.timelineRow}>
+              {timeline.map((event) => (
+                <View key={`${event.key}-${event.timestamp}`} style={styles.timelineItem}>
+                  <Text style={styles.timelineStatus}>{event.status}</Text>
+                  <Text style={styles.timelineTime}>
+                    {new Date(event.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </Text>
+                </View>
+              ))}
+            </ScrollView>
+          </ScrollView>
         </View>
       </View>
 
@@ -1046,7 +1098,8 @@ const styles = StyleSheet.create({
     fontSize: 14
   },
   mapWrap: {
-    flex: 1,
+    height: '48%',
+    minHeight: 250,
     position: 'relative'
   },
   map: {
@@ -1089,24 +1142,48 @@ const styles = StyleSheet.create({
     fontSize: 18
   },
   sheet: {
+    flex: 1,
     width: '100%',
     maxWidth: 460,
     alignSelf: 'center',
-    marginTop: -8,
+    marginTop: -4,
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderColor: '#E2E8F0',
+    overflow: 'hidden'
+  },
+  sheetScroll: {
+    flex: 1
+  },
+  sheetScrollContent: {
     paddingHorizontal: 14,
     paddingTop: 10,
-    paddingBottom: 14,
+    paddingBottom: 18,
     gap: 10
   },
   sheetHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center'
+  },
+  screenNavRow: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  screenNavButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    paddingVertical: 6
+  },
+  screenNavText: {
+    color: '#334155',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
   },
   sheetTitle: {
     color: '#0F172A',

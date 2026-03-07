@@ -35,7 +35,6 @@ function readableDate(value: string) {
 export function CustomerRidesScreen({ navigation }: Props) {
   const user = useSessionStore((state) => state.user);
   const activeOrderId = useCustomerStore((state) => state.activeOrderId);
-  const setActiveOrder = useCustomerStore((state) => state.setActiveOrder);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
@@ -66,9 +65,8 @@ export function CustomerRidesScreen({ navigation }: Props) {
   const ongoing = useMemo(() => orders.filter((item) => isOngoingOrderStatus(item.status)), [orders]);
   const history = useMemo(() => orders.filter((item) => !isOngoingOrderStatus(item.status)), [orders]);
 
-  const openTracking = (order: OrderRow) => {
-    setActiveOrder(order.id, order.status);
-    navigation.navigate('CustomerTracking');
+  const openRideDetails = (order: OrderRow) => {
+    navigation.navigate('CustomerRideDetails', { orderId: order.id });
   };
 
   const navigateFromDrawer = (route: DrawerRoute) => {
@@ -103,7 +101,7 @@ export function CustomerRidesScreen({ navigation }: Props) {
               <Text style={styles.emptyCopy}>No ongoing trips right now.</Text>
             ) : (
               ongoing.map((order) => (
-                <Pressable key={order.id} style={styles.card} onPress={() => openTracking(order)}>
+                <Pressable key={order.id} style={styles.card} onPress={() => openRideDetails(order)}>
                   <View style={styles.cardHeader}>
                     <Text style={styles.cardStatus}>{readableStatus(order.status)}</Text>
                     <Text style={styles.cardPrice}>INR {Number(order.finalPrice ?? order.estimatedPrice ?? 0).toFixed(0)}</Text>
@@ -111,6 +109,7 @@ export function CustomerRidesScreen({ navigation }: Props) {
                   <Text style={styles.cardLine}>From: {order.pickupAddress}</Text>
                   <Text style={styles.cardLine}>To: {order.dropAddress}</Text>
                   <Text style={styles.cardMeta}>{order.id === activeOrderId ? 'Active on this device' : readableDate(order.createdAt)}</Text>
+                  <Text style={styles.cardAction}>Tap for full details</Text>
                 </Pressable>
               ))
             )}
@@ -122,7 +121,7 @@ export function CustomerRidesScreen({ navigation }: Props) {
               <Text style={styles.emptyCopy}>No previous rides yet.</Text>
             ) : (
               history.map((order) => (
-                <View key={order.id} style={styles.card}>
+                <Pressable key={order.id} style={styles.card} onPress={() => openRideDetails(order)}>
                   <View style={styles.cardHeader}>
                     <Text style={styles.cardStatus}>{readableStatus(order.status)}</Text>
                     <Text style={styles.cardPrice}>INR {Number(order.finalPrice ?? order.estimatedPrice ?? 0).toFixed(0)}</Text>
@@ -130,7 +129,8 @@ export function CustomerRidesScreen({ navigation }: Props) {
                   <Text style={styles.cardLine}>From: {order.pickupAddress}</Text>
                   <Text style={styles.cardLine}>To: {order.dropAddress}</Text>
                   <Text style={styles.cardMeta}>{readableDate(order.createdAt)}</Text>
-                </View>
+                  <Text style={styles.cardAction}>Tap for full bill & driver details</Text>
+                </Pressable>
               ))
             )}
           </View>
@@ -252,6 +252,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontFamily: 'Manrope_500Medium',
     color: '#64748B',
+    fontSize: 12
+  },
+  cardAction: {
+    marginTop: 4,
+    fontFamily: 'Manrope_700Bold',
+    color: '#0F766E',
     fontSize: 12
   }
 });

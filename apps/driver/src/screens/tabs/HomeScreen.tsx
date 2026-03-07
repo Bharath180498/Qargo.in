@@ -36,11 +36,8 @@ const TRIP_STAGES: Array<{ key: string; label: string }> = [
 ];
 
 export function HomeScreen() {
-  const bootstrap = useDriverAppStore((state) => state.bootstrap);
   const availabilityStatus = useDriverAppStore((state) => state.availabilityStatus);
   const setAvailability = useDriverAppStore((state) => state.setAvailability);
-  const refreshJobs = useDriverAppStore((state) => state.refreshJobs);
-  const refreshEarnings = useDriverAppStore((state) => state.refreshEarnings);
   const updateLocation = useDriverAppStore((state) => state.updateLocation);
   const currentJob = useDriverAppStore((state) => state.currentJob);
   const nextJob = useDriverAppStore((state) => state.nextJob);
@@ -79,18 +76,6 @@ export function HomeScreen() {
     const elapsed = Math.max(0, now - createdMs);
     return Math.min(1, elapsed / total);
   }, [activeOffer?.createdAt, activeOffer?.expiresAt, now]);
-
-  useEffect(() => {
-    void bootstrap();
-  }, [bootstrap]);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      void Promise.all([refreshJobs(), refreshEarnings()]);
-    }, 10000);
-
-    return () => clearInterval(timer);
-  }, [refreshEarnings, refreshJobs]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);

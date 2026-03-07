@@ -77,9 +77,12 @@ export const useDriverAppStore = create<DriverAppState>((set, get) => ({
     };
 
     driverRealtimeSocket.on('trip:offer:new', refresh);
+    driverRealtimeSocket.on('trip:offer:expiring', refresh);
+    driverRealtimeSocket.on('trip:offer:expired', refresh);
     driverRealtimeSocket.on('driver:queue-offer', refresh);
     driverRealtimeSocket.on('driver:queue-activated', refresh);
     driverRealtimeSocket.on('driver:next-job', refresh);
+    driverRealtimeSocket.on('trip:customer-cancelled', refresh);
   },
   disconnectRealtime() {
     if (driverRealtimeSocket) {
@@ -147,7 +150,10 @@ export const useDriverAppStore = create<DriverAppState>((set, get) => ({
       currentJob: response.data.currentJob,
       nextJob: response.data.nextJob,
       pendingOffers: offersResponse.data ?? response.data.pendingOffers ?? [],
-      availabilityStatus: response.data.currentJob ? 'BUSY' : get().availabilityStatus
+      availabilityStatus: response.data.currentJob
+        ? 'BUSY'
+        : (response.data.availabilityStatus ??
+            (get().availabilityStatus === 'OFFLINE' ? 'OFFLINE' : 'ONLINE'))
     });
   },
   async refreshEarnings() {

@@ -1,5 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { InsurancePlan, OrderStatus, TripOfferStatus, VehicleType } from '@prisma/client';
+import {
+  AvailabilityStatus,
+  InsurancePlan,
+  OrderStatus,
+  TripOfferStatus,
+  TripStatus,
+  VehicleType
+} from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DispatchService } from '../dispatch/dispatch.service';
@@ -10,6 +17,8 @@ import { GenerateOrderEwayBillDto } from './dto/generate-order-ewaybill.dto';
 import { EstimateOrderDto } from './dto/estimate-order.dto';
 import { DriversService } from '../drivers/drivers.service';
 import { RedisService } from '../../common/redis/redis.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { RealtimeService } from '../realtime/realtime.service';
 
 @Injectable()
 export class OrdersService {
@@ -19,7 +28,9 @@ export class OrdersService {
     private readonly pricingService: PricingService,
     private readonly ewayBillService: EwayBillService,
     private readonly driversService: DriversService,
-    private readonly redisService: RedisService
+    private readonly redisService: RedisService,
+    private readonly notificationsService: NotificationsService,
+    private readonly realtimeService: RealtimeService
   ) {}
 
   private get redis() {
@@ -402,21 +413,38 @@ export class OrdersService {
       return order;
     }
 
-    const cancellableStatuses: OrderStatus[] = [OrderStatus.CREATED, OrderStatus.MATCHING];
+    const cancellableStatuses: OrderStatus[] = [
+      OrderStatus.CREATED,
+      OrderStatus.MATCHING,
+      OrderStatus.ASSIGNED
+    ];
     if (!cancellableStatuses.includes(order.status)) {
-      throw new BadRequestException('Booking can only be cancelled while it is being matched.');
+      throw new BadRequestException(
+        'Booking can be cancelled only before driver assignment, or within 1 minute after assignment.'
+      );
     }
 
-    if (order.trip) {
-      throw new BadRequestException('Booking is already assigned and can no longer be cancelled.');
+    if (order.status === OrderStatus.ASSIGNED) {
+      if (!order.trip) {
+        throw new BadRequestException('Booking assignment details are unavailable. Please refresh and retry.');
+      }
+
+      if (order.trip.status !== TripStatus.ASSIGNED) {
+        throw new BadRequestException('Driver has already started the trip. Cancellation is no longer allowed.');
+      }
+
+      const matchedAtMs = order.trip.createdAt.getTime();
+      const elapsedSinceMatchMs = Date.now() - matchedAtMs;
+      if (elapsedSinceMatchMs > 60 * 1000) {
+        throw new BadRequestException(
+          'Cancellation window expired. You can cancel only within 1 minute after driver assignment.'
+        );
+      }
     }
 
-    const elapsedMs = Date.now() - order.createdAt.getTime();
-    if (elapsedMs > 60 * 1000) {
-      throw new BadRequestException('Cancellation window expired. You can cancel only within 1 minute.');
-    }
+    const cancelledAt = new Date();
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       await tx.tripOffer.updateMany({
         where: {
           orderId,
@@ -424,17 +452,79 @@ export class OrdersService {
         },
         data: {
           status: TripOfferStatus.CANCELLED,
-          respondedAt: new Date()
+          respondedAt: cancelledAt
         }
       });
 
-      return tx.order.update({
+      if (order.trip) {
+        await tx.trip.update({
+          where: { id: order.trip.id },
+          data: {
+            status: TripStatus.CANCELLED
+          }
+        });
+      }
+
+      const cancelledOrder = await tx.order.update({
         where: { id: orderId },
         data: {
           status: OrderStatus.CANCELLED
         }
       });
+
+      if (order.trip) {
+        const hasOtherActiveTrips = await tx.trip.count({
+          where: {
+            driverId: order.trip.driverId,
+            id: { not: order.trip.id },
+            status: {
+              in: [
+                TripStatus.ASSIGNED,
+                TripStatus.DRIVER_EN_ROUTE,
+                TripStatus.ARRIVED_PICKUP,
+                TripStatus.LOADING,
+                TripStatus.IN_TRANSIT
+              ]
+            }
+          }
+        });
+
+        if (hasOtherActiveTrips === 0) {
+          await tx.driverProfile.update({
+            where: { id: order.trip.driverId },
+            data: {
+              availabilityStatus: AvailabilityStatus.ONLINE,
+              idleSince: cancelledAt
+            }
+          });
+        }
+      }
+
+      return cancelledOrder;
     });
+
+    this.realtimeService.emitTripUpdate(order.id, 'trip:cancelled', {
+      orderId: order.id,
+      status: 'CANCELLED'
+    });
+
+    if (order.trip) {
+      this.realtimeService.emitDriverUpdate(order.trip.driverId, 'trip:customer-cancelled', {
+        orderId: order.id,
+        tripId: order.trip.id,
+        status: 'CANCELLED'
+      });
+
+      // Push delivery must not block cancellation response.
+      void this.notificationsService
+        .notifyDriver(order.trip.driverId, 'trip_cancelled_by_customer', {
+          orderId: order.id,
+          tripId: order.trip.id
+        })
+        .catch(() => undefined);
+    }
+
+    return result;
   }
 
   async attachEwayBill(orderId: string, payload: GenerateOrderEwayBillDto) {

@@ -253,6 +253,15 @@ export class DriversService implements OnModuleInit {
   }
 
   async getDriverJobs(driverId: string) {
+    const driver = await this.prisma.driverProfile.findUnique({
+      where: { id: driverId },
+      select: { id: true, availabilityStatus: true }
+    });
+
+    if (!driver) {
+      throw new NotFoundException('Driver not found');
+    }
+
     const currentTrip = await this.prisma.trip.findFirst({
       where: {
         driverId,
@@ -294,6 +303,7 @@ export class DriversService implements OnModuleInit {
     });
 
     return {
+      availabilityStatus: driver.availabilityStatus,
       currentJob: currentTrip,
       nextJob: nextOrder,
       pendingOffers

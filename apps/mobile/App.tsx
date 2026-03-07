@@ -10,6 +10,7 @@ import { useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { CustomerHomeScreen } from './src/screens/customer/CustomerHomeScreen';
 import { CustomerRidesScreen } from './src/screens/customer/CustomerRidesScreen';
+import { CustomerRideDetailsScreen } from './src/screens/customer/CustomerRideDetailsScreen';
 import { CustomerProfileScreen } from './src/screens/customer/CustomerProfileScreen';
 import { CustomerPickupConfirmScreen } from './src/screens/customer/CustomerPickupConfirmScreen';
 import { CustomerTripSelectScreen } from './src/screens/customer/CustomerTripSelectScreen';
@@ -68,6 +69,7 @@ export default function App() {
       >
         <Stack.Screen name="CustomerHome" component={CustomerHomeScreen} />
         <Stack.Screen name="CustomerRides" component={CustomerRidesScreen} />
+        <Stack.Screen name="CustomerRideDetails" component={CustomerRideDetailsScreen} />
         <Stack.Screen name="CustomerProfile" component={CustomerProfileScreen} />
         <Stack.Screen name="CustomerPickupConfirm" component={CustomerPickupConfirmScreen} />
         <Stack.Screen name="CustomerTripSelect" component={CustomerTripSelectScreen} />

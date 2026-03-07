@@ -1,14 +1,58 @@
+import { useEffect, useRef } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Alert, Vibration } from 'react-native';
 import type { DriverTabParamList } from '../types';
 import { HomeScreen } from '../screens/tabs/HomeScreen';
 import { EarningsScreen } from '../screens/tabs/EarningsScreen';
 import { HistoryScreen } from '../screens/tabs/HistoryScreen';
 import { ProfileScreen } from '../screens/tabs/ProfileScreen';
 import { colors, typography } from '../theme';
+import { useDriverAppStore } from '../store/useDriverAppStore';
 
 const Tab = createBottomTabNavigator<DriverTabParamList>();
 
 export function DriverTabs() {
+  const bootstrap = useDriverAppStore((state) => state.bootstrap);
+  const refreshJobs = useDriverAppStore((state) => state.refreshJobs);
+  const refreshEarnings = useDriverAppStore((state) => state.refreshEarnings);
+  const pendingOffers = useDriverAppStore((state) => state.pendingOffers);
+  const currentTopOfferId = pendingOffers[0]?.id as string | undefined;
+  const lastSeenOfferId = useRef<string | undefined>(undefined);
+  const isOfferTrackerReady = useRef(false);
+
+  useEffect(() => {
+    void bootstrap();
+  }, [bootstrap]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      void Promise.all([refreshJobs(), refreshEarnings()]);
+    }, 6000);
+
+    return () => clearInterval(timer);
+  }, [refreshEarnings, refreshJobs]);
+
+  useEffect(() => {
+    if (!isOfferTrackerReady.current) {
+      lastSeenOfferId.current = currentTopOfferId;
+      isOfferTrackerReady.current = true;
+      return;
+    }
+
+    if (!currentTopOfferId) {
+      lastSeenOfferId.current = undefined;
+      return;
+    }
+
+    if (currentTopOfferId === lastSeenOfferId.current) {
+      return;
+    }
+
+    lastSeenOfferId.current = currentTopOfferId;
+    Vibration.vibrate([0, 250, 120, 250]);
+    Alert.alert('New job request', 'A nearby trip request is waiting. Open Home to accept.');
+  }, [currentTopOfferId]);
+
   return (
     <Tab.Navigator
       screenOptions={{

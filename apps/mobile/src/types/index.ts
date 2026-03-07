@@ -28,6 +28,7 @@ export interface BookingInput {
   goodsValue: number;
   goodsType?: string;
   insuranceSelected?: InsurancePlan;
+  scheduledAt?: string;
   gstin?: string;
   hsnCode?: string;
   invoiceValue?: number;

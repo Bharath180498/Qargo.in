@@ -19,13 +19,14 @@ interface OnboardingState {
   accountNumber: string;
   ifscCode: string;
   upiId: string;
+  upiQrImageUrl: string;
   uploadedDocs: string[];
   loading: boolean;
   error?: string;
   load: () => Promise<void>;
   updateProfile: (payload: Partial<Pick<OnboardingState, 'fullName' | 'phone' | 'email' | 'city'>>) => Promise<void>;
   updateVehicle: (payload: Partial<Pick<OnboardingState, 'vehicleType' | 'vehicleNumber' | 'licenseNumber' | 'aadhaarNumber' | 'rcNumber'>>) => Promise<void>;
-  updateBank: (payload: Partial<Pick<OnboardingState, 'accountHolderName' | 'bankName' | 'accountNumber' | 'ifscCode' | 'upiId'>>) => Promise<void>;
+  updateBank: (payload: Partial<Pick<OnboardingState, 'accountHolderName' | 'bankName' | 'accountNumber' | 'ifscCode' | 'upiId' | 'upiQrImageUrl'>>) => Promise<void>;
   uploadDoc: (type: string) => Promise<void>;
   submit: () => Promise<void>;
 }
@@ -45,6 +46,7 @@ const defaultState = {
   accountNumber: '',
   ifscCode: '',
   upiId: '',
+  upiQrImageUrl: '',
   uploadedDocs: []
 };
 
@@ -126,6 +128,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
         accountNumber: String(onboarding.accountNumber ?? ''),
         ifscCode: String(onboarding.ifscCode ?? ''),
         upiId: String(onboarding.upiId ?? ''),
+        upiQrImageUrl: String(onboarding.upiQrImageUrl ?? ''),
         uploadedDocs: docs.map((doc) => doc.type),
         error: undefined
       });
@@ -201,7 +204,8 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
         bankName: next.bankName,
         accountNumber: next.accountNumber,
         ifscCode: next.ifscCode,
-        upiId: next.upiId
+        upiId: next.upiId,
+        upiQrImageUrl: next.upiQrImageUrl || undefined
       });
 
       set({ ...payload, loading: false, error: undefined });

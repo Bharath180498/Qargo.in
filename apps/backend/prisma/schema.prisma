@@ -335,6 +335,7 @@ model DriverOnboarding {
   accountNumber     String?
   ifscCode          String?
   upiId             String?
+  upiQrImageUrl     String?
   submittedAt       DateTime?
   approvedAt        DateTime?
   rejectedAt        DateTime?
@@ -401,6 +402,7 @@ model DriverPayoutAccount {
   accountNumber     String
   ifscCode          String
   upiId             String?
+  upiQrImageUrl     String?
   isVerified        Boolean     @default(false)
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt

@@ -23,7 +23,12 @@ export interface RoutePoint {
   lng: number;
 }
 
-export type PaymentMethod = 'VISA_5496' | 'MASTERCARD_6802' | 'UPI_SCAN_PAY' | 'CASH';
+export type PaymentMethod =
+  | 'VISA_5496'
+  | 'MASTERCARD_6802'
+  | 'UPI_SCAN_PAY'
+  | 'DRIVER_UPI_DIRECT'
+  | 'CASH';
 
 interface CustomerState {
   activeOrderId?: string;

@@ -1,5 +1,5 @@
 import { PaymentProvider } from '@prisma/client';
-import { IsEnum, IsNumber, IsString, Min } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreatePaymentDto {
   @IsString()
@@ -11,4 +11,16 @@ export class CreatePaymentDto {
   @IsNumber()
   @Min(1)
   amount!: number;
+
+  @IsOptional()
+  @IsBoolean()
+  directPayToDriver?: boolean;
+
+  @IsOptional()
+  @IsString()
+  directUpiVpa?: string;
+
+  @IsOptional()
+  @IsString()
+  directUpiName?: string;
 }

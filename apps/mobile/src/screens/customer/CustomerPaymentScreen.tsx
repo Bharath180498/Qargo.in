@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Linking,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   View
@@ -22,10 +24,22 @@ const METHODS: Array<{
   description: string;
 }> = [
   { id: 'UPI_SCAN_PAY', title: 'UPI Scan and Pay', description: 'Fastest in India' },
-  { id: 'VISA_5496', title: 'Visa ....5496', description: 'Credit / debit card' },
-  { id: 'MASTERCARD_6802', title: 'Mastercard ....6802', description: 'Credit / debit card' },
+  { id: 'VISA_5496', title: 'Visa ....5496', description: 'Credit / debit card · +2.5% surcharge' },
+  { id: 'MASTERCARD_6802', title: 'Mastercard ....6802', description: 'Credit / debit card · +2.5% surcharge' },
   { id: 'CASH', title: 'Cash at delivery', description: 'Pay driver on completion' }
 ];
+
+const CARD_METHODS: PaymentMethod[] = ['VISA_5496', 'MASTERCARD_6802'];
+
+interface DriverDirectPaymentProfile {
+  name?: string;
+  upiId?: string;
+  upiQrImageUrl?: string;
+}
+
+function normalize(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
 
 export function CustomerPaymentScreen({ navigation }: Props) {
   const selectedMethod = useCustomerStore((state) => state.paymentMethod);
@@ -36,20 +50,136 @@ export function CustomerPaymentScreen({ navigation }: Props) {
   const refreshTimeline = useCustomerStore((state) => state.refreshTimeline);
 
   const [submitting, setSubmitting] = useState(false);
+  const [driverDirectProfile, setDriverDirectProfile] = useState<DriverDirectPaymentProfile>({});
+  const [loadingDriverProfile, setLoadingDriverProfile] = useState(false);
+  const baseAmount = Number(estimatedPrice ?? 0);
+  const isCardMethod = CARD_METHODS.includes(selectedMethod);
+  const cardSurchargeAmount = isCardMethod ? Math.round(baseAmount * 0.025 * 100) / 100 : 0;
+  const payableAmount = Math.round((baseAmount + cardSurchargeAmount) * 100) / 100;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadOrderPaymentProfile = async () => {
+      if (!orderId) {
+        setDriverDirectProfile({});
+        return;
+      }
+
+      setLoadingDriverProfile(true);
+      try {
+        const response = await api.get(`/orders/${orderId}`);
+        if (cancelled) {
+          return;
+        }
+
+        const payload = response.data as {
+          trip?: {
+            driver?: {
+              user?: {
+                name?: string;
+              };
+              payoutAccount?: {
+                upiId?: string;
+                upiQrImageUrl?: string;
+              };
+            };
+          };
+        };
+
+        setDriverDirectProfile({
+          name: normalize(payload.trip?.driver?.user?.name),
+          upiId: normalize(payload.trip?.driver?.payoutAccount?.upiId),
+          upiQrImageUrl: normalize(payload.trip?.driver?.payoutAccount?.upiQrImageUrl)
+        });
+      } catch {
+        if (!cancelled) {
+          setDriverDirectProfile({});
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingDriverProfile(false);
+        }
+      }
+    };
+
+    void loadOrderPaymentProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId]);
+
+  const hasDriverDirectUpi = Boolean(driverDirectProfile.upiId);
+  const methods = useMemo(() => {
+    if (!hasDriverDirectUpi) {
+      return METHODS;
+    }
+
+    return [
+      {
+        id: 'DRIVER_UPI_DIRECT' as const,
+        title: `Pay driver directly${driverDirectProfile.name ? ` · ${driverDirectProfile.name}` : ''}`,
+        description: 'Send full amount to driver UPI'
+      },
+      ...METHODS
+    ];
+  }, [driverDirectProfile.name, hasDriverDirectUpi]);
+
+  useEffect(() => {
+    if (selectedMethod === 'DRIVER_UPI_DIRECT' && !hasDriverDirectUpi) {
+      setPaymentMethod('UPI_SCAN_PAY');
+    }
+  }, [hasDriverDirectUpi, selectedMethod, setPaymentMethod]);
+
+  const driverUpiIntentUrl = useMemo(() => {
+    if (!driverDirectProfile.upiId || !(baseAmount > 0)) {
+      return undefined;
+    }
+
+    const params = new URLSearchParams({
+      pa: driverDirectProfile.upiId,
+      pn: driverDirectProfile.name ?? 'Driver',
+      tn: `Qargo ride payment ${orderId?.slice(0, 8) ?? ''}`,
+      am: baseAmount.toFixed(2),
+      cu: 'INR'
+    });
+
+    return `upi://pay?${params.toString()}`;
+  }, [baseAmount, driverDirectProfile.name, driverDirectProfile.upiId, orderId]);
+
+  const driverUpiQrImageUrl = useMemo(() => {
+    if (!driverDirectProfile.upiId) {
+      return undefined;
+    }
+
+    if (driverDirectProfile.upiQrImageUrl) {
+      return driverDirectProfile.upiQrImageUrl;
+    }
+
+    if (!driverUpiIntentUrl) {
+      return undefined;
+    }
+
+    return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(driverUpiIntentUrl)}`;
+  }, [driverDirectProfile.upiId, driverDirectProfile.upiQrImageUrl, driverUpiIntentUrl]);
 
   const buttonLabel = useMemo(() => {
     if (orderId && estimatedPrice) {
       if (selectedMethod === 'CASH') {
         return 'Confirm Cash on Delivery';
       }
+      if (selectedMethod === 'DRIVER_UPI_DIRECT') {
+        return `Pay driver INR ${estimatedPrice.toFixed(2)}`;
+      }
       if (selectedMethod === 'UPI_SCAN_PAY') {
         return `Pay INR ${estimatedPrice.toFixed(2)} via UPI`;
       }
-      return `Pay INR ${estimatedPrice.toFixed(2)}`;
+      return `Pay INR ${payableAmount.toFixed(2)} (incl. card fee)`;
     }
 
     return 'Done';
-  }, [estimatedPrice, orderId, selectedMethod]);
+  }, [estimatedPrice, orderId, payableAmount, selectedMethod]);
 
   const askForUpiConfirmation = () =>
     new Promise<boolean>((resolve) => {
@@ -79,23 +209,32 @@ export function CustomerPaymentScreen({ navigation }: Props) {
 
     setSubmitting(true);
     try {
+      const isDirectToDriver = selectedMethod === 'DRIVER_UPI_DIRECT';
       const provider =
-        selectedMethod === 'UPI_SCAN_PAY'
+        selectedMethod === 'UPI_SCAN_PAY' || isDirectToDriver
           ? 'UPI'
           : selectedMethod === 'CASH'
             ? 'WALLET'
             : 'RAZORPAY';
 
+      if (isDirectToDriver && !driverDirectProfile.upiId) {
+        Alert.alert('Driver UPI unavailable', 'Driver UPI details are not available for this trip yet.');
+        return;
+      }
+
       const intent = await api.post('/payments/create-intent', {
         orderId,
         provider,
-        amount: estimatedPrice
+        amount: provider === 'RAZORPAY' ? payableAmount : baseAmount,
+        directPayToDriver: isDirectToDriver || undefined,
+        directUpiVpa: isDirectToDriver ? driverDirectProfile.upiId : undefined,
+        directUpiName: isDirectToDriver ? driverDirectProfile.name : undefined
       });
 
       if (provider === 'WALLET') {
         Alert.alert(
           'Cash on Delivery Selected',
-          'Payment will remain pending until handover. Driver will collect cash at delivery.'
+          'Payment will remain pending until handover. Driver will collect cash or direct UPI at delivery.'
         );
         await Promise.all([refreshOrder(), refreshTimeline()]);
         navigation.goBack();
@@ -106,7 +245,9 @@ export function CustomerPaymentScreen({ navigation }: Props) {
       let providerReference = `PAY_${Date.now()}`;
 
       if (provider === 'UPI') {
-        const upiIntentUrl = intent.data?.upiIntentUrl as string | undefined;
+        const upiIntentUrl =
+          (intent.data?.upiIntentUrl as string | undefined) ||
+          (isDirectToDriver ? driverUpiIntentUrl : undefined);
         if (upiIntentUrl) {
           const canOpen = await Linking.canOpenURL(upiIntentUrl);
           if (canOpen) {
@@ -128,7 +269,14 @@ export function CustomerPaymentScreen({ navigation }: Props) {
       await Promise.all([refreshOrder(), refreshTimeline()]);
 
       if (success) {
-        Alert.alert('Payment Complete', 'Payment confirmed for this order.');
+        Alert.alert(
+          'Payment Complete',
+          provider === 'RAZORPAY'
+            ? `Payment confirmed. Card surcharge applied: INR ${cardSurchargeAmount.toFixed(2)}`
+            : isDirectToDriver
+              ? 'Payment confirmed directly to driver UPI.'
+              : 'Payment confirmed for this order.'
+        );
       } else {
         Alert.alert('Payment Pending', 'UPI payment is marked pending/failed. You can retry from tracking.');
       }
@@ -151,31 +299,61 @@ export function CustomerPaymentScreen({ navigation }: Props) {
           <View style={styles.closeButton} />
         </View>
 
-        <View style={styles.hero}>
-          <Text style={styles.heroTitle}>Pay the Bharat way</Text>
-          <Text style={styles.heroSub}>UPI, cards, or cash. Switch anytime before booking.</Text>
-        </View>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.hero}>
+            <Text style={styles.heroTitle}>Pay the Bharat way</Text>
+            <Text style={styles.heroSub}>UPI, cards, or cash. Card payments carry a 2.5% processing surcharge.</Text>
+          </View>
 
-        <View style={styles.methodList}>
-          {METHODS.map((method) => {
-            const selected = method.id === selectedMethod;
-            return (
-              <Pressable
-                key={method.id}
-                style={[styles.methodCard, selected && styles.methodCardSelected]}
-                onPress={() => setPaymentMethod(method.id)}
-              >
-                <View style={styles.methodCopy}>
-                  <Text style={styles.methodTitle}>{method.title}</Text>
-                  <Text style={styles.methodDescription}>{method.description}</Text>
-                </View>
-                <View style={[styles.radio, selected && styles.radioSelected]}>
-                  {selected ? <Text style={styles.radioTick}>v</Text> : null}
-                </View>
-              </Pressable>
-            );
-          })}
-        </View>
+          {selectedMethod === 'DRIVER_UPI_DIRECT' ? (
+            <View style={styles.driverDirectCard}>
+              <Text style={styles.driverDirectTitle}>Driver direct payout</Text>
+              {loadingDriverProfile ? (
+                <ActivityIndicator color="#0F766E" />
+              ) : (
+                <>
+                  <Text style={styles.driverDirectLine}>Driver: {driverDirectProfile.name ?? 'Assigned driver'}</Text>
+                  <Text style={styles.driverDirectLine}>UPI ID: {driverDirectProfile.upiId ?? 'Not available'}</Text>
+                  {driverUpiQrImageUrl ? <Image source={{ uri: driverUpiQrImageUrl }} style={styles.qrImage} /> : null}
+                </>
+              )}
+            </View>
+          ) : null}
+
+          {isCardMethod ? (
+            <View style={styles.surchargeCard}>
+              <Text style={styles.surchargeTitle}>Card processing fee</Text>
+              <Text style={styles.surchargeLine}>Base fare: INR {baseAmount.toFixed(2)}</Text>
+              <Text style={styles.surchargeLine}>Surcharge (2.5%): INR {cardSurchargeAmount.toFixed(2)}</Text>
+              <Text style={styles.surchargeTotal}>Total payable: INR {payableAmount.toFixed(2)}</Text>
+            </View>
+          ) : null}
+
+          <View style={styles.methodList}>
+            {methods.map((method) => {
+              const selected = method.id === selectedMethod;
+              return (
+                <Pressable
+                  key={method.id}
+                  style={[styles.methodCard, selected && styles.methodCardSelected]}
+                  onPress={() => setPaymentMethod(method.id)}
+                >
+                  <View style={styles.methodCopy}>
+                    <Text style={styles.methodTitle}>{method.title}</Text>
+                    <Text style={styles.methodDescription}>{method.description}</Text>
+                  </View>
+                  <View style={[styles.radio, selected && styles.radioSelected]}>
+                    {selected ? <Text style={styles.radioTick}>v</Text> : null}
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
+        </ScrollView>
 
         <Pressable style={styles.primaryButton} onPress={() => void onSubmit()} disabled={submitting}>
           {submitting ? (
@@ -202,6 +380,13 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 16,
     paddingVertical: 8
+  },
+  scroll: {
+    flex: 1
+  },
+  scrollContent: {
+    gap: 12,
+    paddingBottom: 12
   },
   header: {
     flexDirection: 'row',
@@ -244,6 +429,60 @@ const styles = StyleSheet.create({
     color: '#9A3412',
     fontFamily: 'Manrope_500Medium',
     fontSize: 13
+  },
+  driverDirectCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#99F6E4',
+    backgroundColor: '#ECFEFF',
+    padding: 12,
+    gap: 6,
+    alignItems: 'flex-start'
+  },
+  driverDirectTitle: {
+    color: '#134E4A',
+    fontFamily: 'Sora_700Bold',
+    fontSize: 15
+  },
+  driverDirectLine: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_600SemiBold',
+    fontSize: 12
+  },
+  qrImage: {
+    width: 168,
+    height: 168,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    marginTop: 4,
+    backgroundColor: '#FFFFFF'
+  },
+  surchargeCard: {
+    marginTop: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 3
+  },
+  surchargeTitle: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 14
+  },
+  surchargeLine: {
+    color: '#334155',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12
+  },
+  surchargeTotal: {
+    marginTop: 2,
+    color: '#0F766E',
+    fontFamily: 'Sora_700Bold',
+    fontSize: 14
   },
   methodList: {
     marginTop: 12,
@@ -297,7 +536,7 @@ const styles = StyleSheet.create({
     fontSize: 12
   },
   primaryButton: {
-    marginTop: 'auto',
+    marginTop: 8,
     borderRadius: 14,
     backgroundColor: '#0F766E',
     alignItems: 'center',

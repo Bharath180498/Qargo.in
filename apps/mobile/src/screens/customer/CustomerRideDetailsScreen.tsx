@@ -59,6 +59,9 @@ interface RideDetailsResponse {
     driver?: {
       vehicleNumber?: string | null;
       licenseNumber?: string | null;
+      payoutAccount?: {
+        upiId?: string | null;
+      } | null;
       user?: {
         name?: string | null;
         phone?: string | null;
@@ -234,6 +237,7 @@ export function CustomerRideDetailsScreen({ navigation, route }: Props) {
                 Vehicle Type: {prettify(ride.trip?.driver?.vehicles?.[0]?.type ?? ride.vehicleType)}
               </Text>
               <Text style={styles.lineItem}>License: {ride.trip?.driver?.licenseNumber ?? 'N/A'}</Text>
+              <Text style={styles.lineItem}>Driver UPI: {ride.trip?.driver?.payoutAccount?.upiId ?? 'N/A'}</Text>
             </View>
 
             <View style={styles.sectionCard}>

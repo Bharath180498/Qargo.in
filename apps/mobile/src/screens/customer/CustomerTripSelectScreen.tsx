@@ -13,7 +13,8 @@ import type { InsurancePlan, VehicleType } from '@porter/shared';
 import { VEHICLE_UI_META } from '@porter/shared';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types/navigation';
-import { type PaymentMethod, isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
+import { type PaymentMethod, useCustomerStore } from '../../store/useCustomerStore';
+import { useSessionStore } from '../../store/useSessionStore';
 import MapView, { Marker, Polyline } from '../../components/maps';
 import api from '../../services/api';
 import appConfig from '../../../app.json';
@@ -22,6 +23,15 @@ interface RouteCoordinate {
   latitude: number;
   longitude: number;
 }
+
+interface VirtualTruckMarker {
+  id: string;
+  latitude: number;
+  longitude: number;
+  distanceKm: number;
+}
+
+type SchedulePreset = 'NOW' | 'PLUS_30' | 'PLUS_60' | 'TOMORROW_9';
 
 const MOBILE_GOOGLE_MAPS_API_KEY =
   typeof (
@@ -44,8 +54,10 @@ const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   VISA_5496: 'Visa ....5496',
   MASTERCARD_6802: 'Mastercard ....6802',
   UPI_SCAN_PAY: 'UPI Scan and Pay',
+  DRIVER_UPI_DIRECT: 'Driver UPI (direct)',
   CASH: 'Cash'
 };
+const CARD_METHODS: PaymentMethod[] = ['VISA_5496', 'MASTERCARD_6802'];
 
 const INSURANCE_LABELS: Record<InsurancePlan, string> = {
   NONE: 'No cover',
@@ -58,6 +70,15 @@ const FALLBACK_CENTER = {
   lat: 12.9716,
   lng: 77.5946
 };
+
+const MAX_CONCURRENT_RIDES = 3;
+const ONGOING_ORDER_STATUSES = new Set(['CREATED', 'MATCHING', 'ASSIGNED', 'AT_PICKUP', 'LOADING', 'IN_TRANSIT']);
+const SCHEDULE_PRESETS: Array<{ id: SchedulePreset; label: string }> = [
+  { id: 'NOW', label: 'Now' },
+  { id: 'PLUS_30', label: '+30 min' },
+  { id: 'PLUS_60', label: '+1 hour' },
+  { id: 'TOMORROW_9', label: 'Tomorrow 9 AM' }
+];
 
 function getVehicleSymbol(vehicleType: VehicleType) {
   if (vehicleType === 'THREE_WHEELER') {
@@ -85,6 +106,79 @@ function formatPromoTag(input: { cheapest: boolean; fastest: boolean; rating?: n
   }
 
   return { label: 'Standard fare', tone: 'DEFAULT' as const };
+}
+
+function extractErrorMessage(error: unknown, fallback: string) {
+  if (typeof error === 'object' && error !== null) {
+    if ('response' in error) {
+      const response = (error as { response?: { data?: { message?: unknown } } }).response;
+      const message = response?.data?.message;
+      if (typeof message === 'string' && message.trim().length > 0) {
+        return message;
+      }
+      if (Array.isArray(message) && typeof message[0] === 'string') {
+        return message[0];
+      }
+    }
+    if ('message' in error && typeof (error as { message?: unknown }).message === 'string') {
+      return (error as { message: string }).message;
+    }
+  }
+
+  return fallback;
+}
+
+function buildVirtualTruckMarkers(anchor: { lat: number; lng: number }, count = 3): VirtualTruckMarker[] {
+  const offsets = [
+    { lat: 0.0032, lng: 0.0011 },
+    { lat: -0.0026, lng: 0.0025 },
+    { lat: 0.0018, lng: -0.0031 },
+    { lat: -0.0034, lng: -0.0016 }
+  ];
+
+  return offsets.slice(0, count).map((offset, index) => ({
+    id: `virtual-${index + 1}`,
+    latitude: anchor.lat + offset.lat,
+    longitude: anchor.lng + offset.lng,
+    distanceKm: Math.round(Math.sqrt(offset.lat ** 2 + offset.lng ** 2) * 111 * 10) / 10
+  }));
+}
+
+function getScheduledAtIso(preset: SchedulePreset) {
+  if (preset === 'NOW') {
+    return undefined;
+  }
+
+  const now = new Date();
+
+  if (preset === 'PLUS_30') {
+    return new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+  }
+
+  if (preset === 'PLUS_60') {
+    return new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+  }
+
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  tomorrow.setHours(9, 0, 0, 0);
+  return tomorrow.toISOString();
+}
+
+function formatScheduleLabel(iso?: string) {
+  if (!iso) {
+    return 'Dispatch immediately after booking';
+  }
+
+  const value = new Date(iso);
+  if (Number.isNaN(value.getTime())) {
+    return 'Scheduled pickup';
+  }
+
+  return `Scheduled for ${value.toLocaleDateString()} at ${value.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
+  })}`;
 }
 
 function decodePolyline(encoded: string) {
@@ -220,6 +314,7 @@ async function fetchRouteDirect(input: {
 }
 
 export function CustomerTripSelectScreen({ navigation }: Props) {
+  const user = useSessionStore((state) => state.user);
   const {
     quotes,
     selectedVehicle,
@@ -232,8 +327,6 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
     insuranceSelected,
     minDriverRating,
     paymentMethod,
-    activeOrderId,
-    activeOrderStatus,
     createBooking,
     creating,
     estimateLoading,
@@ -241,9 +334,13 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
     clearError
   } = useCustomerStore();
   const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinate[]>([]);
+  const [schedulePreset, setSchedulePreset] = useState<SchedulePreset>('NOW');
 
   const hasRoute = Boolean(draftPickup && draftDrop);
   const selectedMeta = selectedVehicle ? VEHICLE_UI_META[selectedVehicle.vehicleType] : null;
+  const cardSurchargeNote = CARD_METHODS.includes(paymentMethod)
+    ? 'Card payments include a 2.5% processing surcharge'
+    : null;
   const cheapestTotal = useMemo(() => {
     if (quotes.length === 0) {
       return undefined;
@@ -258,6 +355,8 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
 
     return Math.min(...quotes.map((item) => item.etaMinutes));
   }, [quotes]);
+  const scheduledAt = useMemo(() => getScheduledAtIso(schedulePreset), [schedulePreset]);
+  const scheduleLabel = useMemo(() => formatScheduleLabel(scheduledAt), [scheduledAt]);
 
   const region = useMemo(
     () => ({
@@ -268,6 +367,33 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
     }),
     [draftDrop?.lat, draftDrop?.lng, draftPickup?.lat, draftPickup?.lng, hasRoute]
   );
+  const virtualTruckMarkers = useMemo(
+    () =>
+      buildVirtualTruckMarkers({
+        lat: draftPickup?.lat ?? region.latitude,
+        lng: draftPickup?.lng ?? region.longitude
+      }),
+    [draftPickup?.lat, draftPickup?.lng, region.latitude, region.longitude]
+  );
+
+  const getOngoingOrderCount = async () => {
+    if (!user?.id) {
+      return 0;
+    }
+
+    try {
+      const response = await api.get('/orders', {
+        params: {
+          customerId: user.id
+        }
+      });
+
+      const payload = Array.isArray(response.data) ? response.data : [];
+      return payload.filter((item) => ONGOING_ORDER_STATUSES.has(String(item?.status ?? ''))).length;
+    } catch {
+      return 0;
+    }
+  };
 
   useEffect(() => {
     if (!draftPickup || !draftDrop) {
@@ -364,13 +490,14 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
   }, [draftDrop?.lat, draftDrop?.lng, draftPickup?.lat, draftPickup?.lng]);
 
   const submitBooking = async () => {
-    if (activeOrderId && isOngoingOrderStatus(activeOrderStatus)) {
+    const ongoingCount = await getOngoingOrderCount();
+    if (ongoingCount >= MAX_CONCURRENT_RIDES) {
       Alert.alert(
-        'Trip already active',
-        'You already have an ongoing trip. Please complete it before booking another.',
+        'Ride limit reached',
+        'You can run up to 3 active rides at once. Complete or cancel one ride to create another.',
         [
-          { text: 'OK', style: 'cancel' },
-          { text: 'Go to Tracking', onPress: () => navigation.navigate('CustomerTracking') }
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Open Ride History', onPress: () => navigation.navigate('CustomerRides') }
         ]
       );
       return;
@@ -395,12 +522,29 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
         goodsDescription,
         goodsType,
         goodsValue,
-        insuranceSelected
+        insuranceSelected,
+        scheduledAt
       });
 
+      if (scheduledAt) {
+        Alert.alert('Pickup scheduled', 'Scheduled ride created. You can monitor all rides from Ride History.');
+        navigation.navigate('CustomerRides');
+        return;
+      }
+
       navigation.navigate('CustomerTracking');
-    } catch {
-      Alert.alert('Booking failed', 'Could not create booking. Please retry.');
+    } catch (error) {
+      const message = extractErrorMessage(error, 'Could not create booking. Please retry.');
+      if (message.toLowerCase().includes('maximum 3 active bookings')) {
+        Alert.alert(
+          'Ride limit reached',
+          'You can run up to 3 active rides at once. Complete one ride first.',
+          [{ text: 'Open Ride History', onPress: () => navigation.navigate('CustomerRides') }]
+        );
+        return;
+      }
+
+      Alert.alert('Booking failed', message);
     }
   };
 
@@ -441,6 +585,15 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
             {draftDrop ? (
               <Marker coordinate={{ latitude: draftDrop.lat, longitude: draftDrop.lng }} title="Drop" pinColor="#F97316" />
             ) : null}
+            {virtualTruckMarkers.map((truck) => (
+              <Marker
+                key={truck.id}
+                coordinate={{ latitude: truck.latitude, longitude: truck.longitude }}
+                title="Nearby QARGO truck"
+                description={`${truck.distanceKm.toFixed(1)} km away`}
+                pinColor="#0EA5E9"
+              />
+            ))}
             {draftPickup && draftDrop ? (
               <Polyline
                 coordinates={
@@ -500,6 +653,27 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
             <Text style={styles.filterChip}>INR {goodsValue.toFixed(0)}</Text>
           </View>
 
+          <View style={styles.scheduleSection}>
+            <View style={styles.scheduleHeader}>
+              <Text style={styles.scheduleTitle}>Pickup time</Text>
+              <Text style={styles.scheduleHint}>{scheduleLabel}</Text>
+            </View>
+            <View style={styles.scheduleOptions}>
+              {SCHEDULE_PRESETS.map((preset) => {
+                const active = schedulePreset === preset.id;
+                return (
+                  <Pressable
+                    key={preset.id}
+                    style={[styles.scheduleChip, active && styles.scheduleChipActive]}
+                    onPress={() => setSchedulePreset(preset.id)}
+                  >
+                    <Text style={[styles.scheduleChipText, active && styles.scheduleChipTextActive]}>{preset.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
           <ScrollView
             style={styles.list}
             contentContainerStyle={styles.listContent}
@@ -512,6 +686,7 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
             {quotes.map((quote) => {
               const meta = VEHICLE_UI_META[quote.vehicleType as VehicleType];
               const active = selectedVehicle?.vehicleType === quote.vehicleType;
+              const displayedNearbyDrivers = quote.availableDrivers + virtualTruckMarkers.length;
               const rawPrice =
                 quote.pricing.multiplier > 0 && quote.pricing.multiplier < 1
                   ? quote.pricing.total / quote.pricing.multiplier
@@ -567,7 +742,7 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
                         <Text style={styles.tripBadgeText}>{badge.label}</Text>
                       </View>
                       <Text style={styles.tripMetaSecondary}>
-                        {quote.availableDrivers} nearby drivers · Multiplier x{quote.pricing.multiplier.toFixed(2)}
+                        {displayedNearbyDrivers} nearby trucks · Multiplier x{quote.pricing.multiplier.toFixed(2)}
                       </Text>
                     </View>
                   </View>
@@ -594,7 +769,10 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
               <View style={styles.cardChip}>
                 <Text style={styles.cardChipText}>PAY</Text>
               </View>
-              <Text style={styles.paymentLabel}>{PAYMENT_LABELS[paymentMethod]}</Text>
+              <View>
+                <Text style={styles.paymentLabel}>{PAYMENT_LABELS[paymentMethod]}</Text>
+                {cardSurchargeNote ? <Text style={styles.paymentSubLabel}>{cardSurchargeNote}</Text> : null}
+              </View>
             </View>
             <Text style={styles.routeArrow}>{'>'}</Text>
           </Pressable>
@@ -777,6 +955,54 @@ const styles = StyleSheet.create({
     fontSize: 11,
     paddingHorizontal: 8,
     paddingVertical: 4
+  },
+  scheduleSection: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    marginTop: 6
+  },
+  scheduleHeader: {
+    gap: 2,
+    marginBottom: 8
+  },
+  scheduleTitle: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13
+  },
+  scheduleHint: {
+    color: '#475569',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 11
+  },
+  scheduleOptions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6
+  },
+  scheduleChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 6
+  },
+  scheduleChipActive: {
+    borderColor: '#0F766E',
+    backgroundColor: '#CCFBF1'
+  },
+  scheduleChipText: {
+    color: '#334155',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 11
+  },
+  scheduleChipTextActive: {
+    color: '#0F766E'
   },
   list: {
     flex: 1
@@ -978,6 +1204,12 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     fontFamily: 'Manrope_700Bold',
     fontSize: 14
+  },
+  paymentSubLabel: {
+    marginTop: 1,
+    color: '#B45309',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 11
   },
   ctaRow: {
     flexDirection: 'row',

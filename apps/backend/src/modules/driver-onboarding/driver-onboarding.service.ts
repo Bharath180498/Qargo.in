@@ -101,18 +101,55 @@ export class DriverOnboardingService {
   async upsertBank(payload: UpsertDriverBankDto) {
     await this.ensureUser(payload.userId);
     const onboarding = await this.ensureOnboarding(payload.userId);
+    const normalizedIfsc = payload.ifscCode.trim().toUpperCase();
+    const normalizedUpi = payload.upiId.trim().toLowerCase();
+    const normalizedUpiQrImageUrl =
+      typeof payload.upiQrImageUrl === 'string' && payload.upiQrImageUrl.trim().length > 0
+        ? payload.upiQrImageUrl.trim()
+        : null;
 
-    return this.prisma.driverOnboarding.update({
+    const updatedOnboarding = await this.prisma.driverOnboarding.update({
       where: { id: onboarding.id },
       data: {
-        accountHolderName: payload.accountHolderName,
-        bankName: payload.bankName,
-        accountNumber: payload.accountNumber,
-        ifscCode: payload.ifscCode,
-        upiId: payload.upiId ?? onboarding.upiId,
+        accountHolderName: payload.accountHolderName.trim(),
+        bankName: payload.bankName.trim(),
+        accountNumber: payload.accountNumber.trim(),
+        ifscCode: normalizedIfsc,
+        upiId: normalizedUpi,
+        upiQrImageUrl: normalizedUpiQrImageUrl,
         status: OnboardingStatus.IN_PROGRESS
       }
     });
+
+    const driverProfile = await this.prisma.driverProfile.findUnique({
+      where: { userId: payload.userId },
+      select: { id: true }
+    });
+
+    if (driverProfile) {
+      await this.prisma.driverPayoutAccount.upsert({
+        where: { driverId: driverProfile.id },
+        update: {
+          accountHolderName: updatedOnboarding.accountHolderName ?? payload.accountHolderName.trim(),
+          bankName: updatedOnboarding.bankName ?? payload.bankName.trim(),
+          accountNumber: updatedOnboarding.accountNumber ?? payload.accountNumber.trim(),
+          ifscCode: updatedOnboarding.ifscCode ?? normalizedIfsc,
+          upiId: updatedOnboarding.upiId ?? normalizedUpi,
+          upiQrImageUrl: updatedOnboarding.upiQrImageUrl ?? normalizedUpiQrImageUrl ?? undefined
+        },
+        create: {
+          driverId: driverProfile.id,
+          accountHolderName: updatedOnboarding.accountHolderName ?? payload.accountHolderName.trim(),
+          bankName: updatedOnboarding.bankName ?? payload.bankName.trim(),
+          accountNumber: updatedOnboarding.accountNumber ?? payload.accountNumber.trim(),
+          ifscCode: updatedOnboarding.ifscCode ?? normalizedIfsc,
+          upiId: updatedOnboarding.upiId ?? normalizedUpi,
+          upiQrImageUrl: updatedOnboarding.upiQrImageUrl ?? normalizedUpiQrImageUrl ?? undefined
+        }
+      });
+    }
+
+    return updatedOnboarding;
   }
 
   async submit(userId: string) {
@@ -126,7 +163,8 @@ export class DriverOnboardingService {
       ['accountHolderName', onboarding.accountHolderName],
       ['bankName', onboarding.bankName],
       ['accountNumber', onboarding.accountNumber],
-      ['ifscCode', onboarding.ifscCode]
+      ['ifscCode', onboarding.ifscCode],
+      ['upiId', onboarding.upiId]
     ]
       .filter(([, value]) => !value)
       .map(([field]) => field);
@@ -163,7 +201,7 @@ export class DriverOnboardingService {
       updated.licenseNumber &&
       updated.aadhaarNumber
     ) {
-      await this.prisma.driverProfile.upsert({
+      const driverProfile = await this.prisma.driverProfile.upsert({
         where: { userId },
         update: {
           vehicleType: updated.vehicleType,
@@ -181,6 +219,29 @@ export class DriverOnboardingService {
           verificationStatus: VerificationStatus.APPROVED
         }
       });
+
+      if (updated.accountHolderName && updated.bankName && updated.accountNumber && updated.ifscCode) {
+        await this.prisma.driverPayoutAccount.upsert({
+          where: { driverId: driverProfile.id },
+          update: {
+            accountHolderName: updated.accountHolderName,
+            bankName: updated.bankName,
+            accountNumber: updated.accountNumber,
+            ifscCode: updated.ifscCode,
+            upiId: updated.upiId ?? undefined,
+            upiQrImageUrl: updated.upiQrImageUrl ?? undefined
+          },
+          create: {
+            driverId: driverProfile.id,
+            accountHolderName: updated.accountHolderName,
+            bankName: updated.bankName,
+            accountNumber: updated.accountNumber,
+            ifscCode: updated.ifscCode,
+            upiId: updated.upiId ?? undefined,
+            upiQrImageUrl: updated.upiQrImageUrl ?? undefined
+          }
+        });
+      }
     }
 
     return updated;
@@ -198,4 +259,3 @@ export class DriverOnboardingService {
     });
   }
 }
-

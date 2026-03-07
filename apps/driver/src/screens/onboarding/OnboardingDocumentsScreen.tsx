@@ -37,6 +37,7 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
   const bankName = useOnboardingStore((state) => state.bankName);
   const accountNumber = useOnboardingStore((state) => state.accountNumber);
   const ifscCode = useOnboardingStore((state) => state.ifscCode);
+  const upiId = useOnboardingStore((state) => state.upiId);
   const error = useOnboardingStore((state) => state.error);
 
   useEffect(() => {
@@ -63,7 +64,8 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
         ['account holder', accountHolderName],
         ['bank name', bankName],
         ['account number', accountNumber],
-        ['IFSC code', ifscCode]
+        ['IFSC code', ifscCode],
+        ['UPI ID', upiId]
       ]
         .filter(([, value]) => !String(value ?? '').trim())
         .map(([label]) => label),
@@ -75,6 +77,7 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
       ifscCode,
       licenseNumber,
       phone,
+      upiId,
       vehicleNumber,
       vehicleType
     ]

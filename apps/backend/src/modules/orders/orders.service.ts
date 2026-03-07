@@ -51,33 +51,6 @@ export class OrdersService {
     return earthRadiusKm * c;
   }
 
-  private isOngoingOrderStatus(status: OrderStatus) {
-    switch (status) {
-      case OrderStatus.CREATED:
-      case OrderStatus.MATCHING:
-      case OrderStatus.ASSIGNED:
-      case OrderStatus.AT_PICKUP:
-      case OrderStatus.LOADING:
-      case OrderStatus.IN_TRANSIT:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  private isDriverAssignedStatus(status: OrderStatus) {
-    switch (status) {
-      case OrderStatus.ASSIGNED:
-      case OrderStatus.AT_PICKUP:
-      case OrderStatus.LOADING:
-      case OrderStatus.IN_TRANSIT:
-      case OrderStatus.DELIVERED:
-        return true;
-      default:
-        return false;
-    }
-  }
-
   async estimate(payload: EstimateOrderDto) {
     const vehicleTypes: VehicleType[] = payload.vehicleType
       ? [payload.vehicleType]
@@ -139,7 +112,7 @@ export class OrdersService {
   }
 
   async create(payload: CreateOrderDto) {
-    const existingActiveOrder = await this.prisma.order.findFirst({
+    const activeOrders = await this.prisma.order.findMany({
       where: {
         customerId: payload.customerId,
         status: {
@@ -153,27 +126,12 @@ export class OrdersService {
           ]
         }
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      take: 4
     });
 
-    if (existingActiveOrder) {
-      const assignment =
-        existingActiveOrder.status === OrderStatus.MATCHING
-          ? await this.dispatchService.assignOrder(existingActiveOrder.id)
-          : {
-              assigned: this.isDriverAssignedStatus(existingActiveOrder.status),
-              mode: 'EXISTING_ACTIVE',
-              reason: 'ACTIVE_ORDER_EXISTS'
-            };
-
-      return {
-        order_id: existingActiveOrder.id,
-        order_status: existingActiveOrder.status,
-        estimated_price: Number(existingActiveOrder.estimatedPrice),
-        driver_assigned: this.isDriverAssignedStatus(existingActiveOrder.status),
-        dispatch_mode: 'EXISTING_ACTIVE',
-        assignment
-      };
+    if (activeOrders.length >= 3) {
+      throw new BadRequestException('Maximum 3 active bookings allowed per customer');
     }
 
     const insurancePlan = payload.insuranceSelected ?? InsurancePlan.NONE;
@@ -274,6 +232,7 @@ export class OrdersService {
               include: {
                 user: true,
                 vehicles: true,
+                payoutAccount: true,
                 _count: {
                   select: {
                     trips: true

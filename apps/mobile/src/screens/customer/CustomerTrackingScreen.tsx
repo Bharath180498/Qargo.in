@@ -388,6 +388,7 @@ export function CustomerTrackingScreen({ navigation }: Props) {
   const assignedDriver = order?.trip?.driver;
   const assignedDriverUser = assignedDriver?.user;
   const assignedDriverVehicle = assignedDriver?.vehicles?.[0];
+  const assignedDriverUpiId = assignedDriver?.payoutAccount?.upiId;
   const assignedDriverStaticPoint =
     typeof assignedDriver?.currentLat === 'number' && typeof assignedDriver?.currentLng === 'number'
       ? {
@@ -931,6 +932,10 @@ export function CustomerTrackingScreen({ navigation }: Props) {
                   <View style={styles.driverInfoItem}>
                     <Text style={styles.driverInfoLabel}>License</Text>
                     <Text style={styles.driverInfoValue}>{assignedDriver?.licenseNumber ?? 'Pending'}</Text>
+                  </View>
+                  <View style={styles.driverInfoItem}>
+                    <Text style={styles.driverInfoLabel}>Driver UPI</Text>
+                    <Text style={styles.driverInfoValue}>{assignedDriverUpiId ?? 'Pending'}</Text>
                   </View>
                 </View>
               </View>

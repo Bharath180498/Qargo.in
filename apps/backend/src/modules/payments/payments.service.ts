@@ -8,6 +8,8 @@ import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
 
 @Injectable()
 export class PaymentsService {
+  private static readonly CARD_SURCHARGE_PERCENT = 2.5;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService
@@ -35,6 +37,24 @@ export class PaymentsService {
 
   private toPaise(amount: number) {
     return Math.round(amount * 100);
+  }
+
+  private roundCurrency(amount: number) {
+    return Math.round(amount * 100) / 100;
+  }
+
+  private pricingBreakdown(provider: PaymentProvider, baseAmount: number) {
+    const surchargePercent =
+      provider === PaymentProvider.RAZORPAY ? PaymentsService.CARD_SURCHARGE_PERCENT : 0;
+    const surchargeAmount = this.roundCurrency((baseAmount * surchargePercent) / 100);
+    const totalAmount = this.roundCurrency(baseAmount + surchargeAmount);
+
+    return {
+      baseAmount,
+      surchargePercent,
+      surchargeAmount,
+      totalAmount
+    };
   }
 
   private safeEqual(a: string, b: string) {
@@ -77,12 +97,23 @@ export class PaymentsService {
     return this.safeEqual(expected, signature);
   }
 
-  private buildUpiIntent(paymentId: string, amount: number) {
-    const vpa = this.upiPayeeVpa || 'qargo.demo@upi';
+  private buildUpiIntent(
+    paymentId: string,
+    amount: number,
+    options?: {
+      vpa?: string;
+      name?: string;
+      note?: string;
+    }
+  ) {
+    const vpa = options?.vpa?.trim() || this.upiPayeeVpa || 'qargo.demo@upi';
+    const payeeName = options?.name?.trim() || this.upiPayeeName;
+    const note = options?.note?.trim() || `Qargo Order ${paymentId.slice(0, 8)}`;
+
     const params = new URLSearchParams({
       pa: vpa,
-      pn: this.upiPayeeName,
-      tn: `Qargo Order ${paymentId.slice(0, 8)}`,
+      pn: payeeName,
+      tn: note,
       tr: paymentId,
       am: amount.toFixed(2),
       cu: 'INR'
@@ -152,24 +183,43 @@ export class PaymentsService {
   }
 
   async createIntent(payload: CreatePaymentDto) {
-    const order = await this.prisma.order.findUnique({ where: { id: payload.orderId } });
+    const order = await this.prisma.order.findUnique({
+      where: { id: payload.orderId },
+      include: {
+        trip: {
+          include: {
+            driver: {
+              include: {
+                user: true,
+                payoutAccount: true
+              }
+            }
+          }
+        }
+      }
+    });
     if (!order) {
       throw new NotFoundException('Order not found');
     }
+
+    const computedBaseAmount = this.roundCurrency(
+      Number(order.finalPrice ?? order.estimatedPrice ?? payload.amount)
+    );
+    const breakdown = this.pricingBreakdown(payload.provider, computedBaseAmount);
 
     const defaultProviderRef = `intent_${payload.provider.toLowerCase()}_${Date.now()}`;
 
     const payment = await this.prisma.payment.upsert({
       where: { orderId: payload.orderId },
       update: {
-        amount: payload.amount,
+        amount: breakdown.totalAmount,
         provider: payload.provider,
         status: PaymentStatus.PENDING,
         providerRef: defaultProviderRef
       },
       create: {
         orderId: payload.orderId,
-        amount: payload.amount,
+        amount: breakdown.totalAmount,
         provider: payload.provider,
         status: PaymentStatus.PENDING,
         providerRef: defaultProviderRef
@@ -179,7 +229,7 @@ export class PaymentsService {
     if (payload.provider === PaymentProvider.RAZORPAY) {
       const razorpayOrder = await this.createRazorpayOrder({
         orderId: payload.orderId,
-        amount: payload.amount
+        amount: breakdown.totalAmount
       });
 
       const updated = await this.prisma.payment.update({
@@ -198,13 +248,26 @@ export class PaymentsService {
         amountPaise: this.toPaise(Number(updated.amount)),
         currency: 'INR',
         mode: razorpayOrder.mode,
-        reason: razorpayOrder.reason
+        reason: razorpayOrder.reason,
+        ...breakdown
       };
     }
 
     if (payload.provider === PaymentProvider.UPI) {
-      const upiIntentUrl = this.buildUpiIntent(payment.id, Number(payment.amount));
-      const providerRef = `upi_${payment.id}`;
+      const driverPayeeVpa = order.trip?.driver?.payoutAccount?.upiId?.trim();
+      const directPayeeVpa = payload.directUpiVpa?.trim() || (payload.directPayToDriver ? driverPayeeVpa : '');
+      const resolvedPayeeVpa = directPayeeVpa || this.upiPayeeVpa || 'qargo.demo@upi';
+      const resolvedPayeeName =
+        payload.directUpiName?.trim() ||
+        (payload.directPayToDriver ? order.trip?.driver?.user?.name?.trim() : '') ||
+        this.upiPayeeName;
+      const isDirectToDriver = Boolean(payload.directPayToDriver && directPayeeVpa);
+      const upiIntentUrl = this.buildUpiIntent(payment.id, Number(payment.amount), {
+        vpa: resolvedPayeeVpa,
+        name: resolvedPayeeName,
+        note: isDirectToDriver ? `Qargo Driver ${payment.id.slice(0, 8)}` : undefined
+      });
+      const providerRef = `${isDirectToDriver ? 'upi_direct' : 'upi'}_${payment.id}`;
       const updated = await this.prisma.payment.update({
         where: { id: payment.id },
         data: { providerRef }
@@ -217,7 +280,13 @@ export class PaymentsService {
         upiIntentUrl,
         amount: Number(updated.amount),
         currency: 'INR',
-        mode: this.upiPayeeVpa ? 'live' : 'mock'
+        mode: resolvedPayeeVpa.includes('@') ? 'live' : 'mock',
+        payee: {
+          vpa: resolvedPayeeVpa,
+          name: resolvedPayeeName,
+          directToDriver: isDirectToDriver
+        },
+        ...breakdown
       };
     }
 
@@ -228,7 +297,8 @@ export class PaymentsService {
       clientSecret: `client_secret_${payment.id}`,
       amount: Number(payment.amount),
       currency: 'INR',
-      mode: 'mock'
+      mode: 'mock',
+      ...breakdown
     };
   }
 

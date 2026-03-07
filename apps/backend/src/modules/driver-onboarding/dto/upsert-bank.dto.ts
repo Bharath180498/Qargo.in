@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
 
 export class UpsertDriverBankDto {
   @ApiProperty({ example: 'user-id' })
@@ -22,9 +22,16 @@ export class UpsertDriverBankDto {
   @IsString()
   ifscCode!: string;
 
-  @ApiProperty({ required: false, example: 'ravi@okhdfcbank' })
+  @ApiProperty({ example: 'ravi@okhdfcbank' })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/i, {
+    message: 'UPI ID must be in valid format (example: name@bank)'
+  })
+  upiId!: string;
+
+  @ApiProperty({ example: 'https://cdn.example.com/driver-upi-qr.png', required: false })
   @IsOptional()
   @IsString()
-  upiId?: string;
+  upiQrImageUrl?: string;
 }
-

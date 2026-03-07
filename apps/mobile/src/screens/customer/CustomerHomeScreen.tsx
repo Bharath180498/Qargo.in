@@ -4,7 +4,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types/navigation';
 import { type RoutePoint, isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
+import { useSessionStore } from '../../store/useSessionStore';
 import { CustomerSideDrawer, type DrawerRoute } from '../../components/CustomerSideDrawer';
+import api from '../../services/api';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerHome'>;
 
@@ -32,8 +34,11 @@ const SERVICES = [
   { key: 'truck', title: 'Truck', subtitle: 'Bulk loads', accent: '#1D4ED8' },
   { key: 'city', title: 'City-to-City', subtitle: 'Intercity', accent: '#7C3AED' }
 ] as const;
+const MAX_CONCURRENT_RIDES = 3;
+const ONGOING_ORDER_STATUSES = new Set(['CREATED', 'MATCHING', 'ASSIGNED', 'AT_PICKUP', 'LOADING', 'IN_TRANSIT']);
 
 export function CustomerHomeScreen({ navigation }: Props) {
+  const user = useSessionStore((state) => state.user);
   const setDraftRoute = useCustomerStore((state) => state.setDraftRoute);
   const activeOrderId = useCustomerStore((state) => state.activeOrderId);
   const activeOrderStatus = useCustomerStore((state) => state.activeOrderStatus);
@@ -56,16 +61,10 @@ export function CustomerHomeScreen({ navigation }: Props) {
   const hasOngoingOrder = Boolean(activeOrderId && isOngoingOrderStatus(activeOrderStatus));
   const hasSummaryPending = Boolean(activeOrderId && activeOrderStatus === 'DELIVERED');
   const hasOpenOrder = hasOngoingOrder || hasSummaryPending;
-  const bookingLockLabel = hasOngoingOrder
-    ? 'Trip in progress'
-    : hasSummaryPending
-      ? 'Completed trip summary pending'
-      : 'Pick-up and drop';
+  const bookingLockLabel = hasOngoingOrder ? 'Active rides running' : 'Pick-up and drop';
   const bookingLockTitle = hasOngoingOrder
-    ? 'Booking paused while trip is active'
-    : hasSummaryPending
-      ? 'Booking locked until summary is closed'
-      : 'Where should we deliver?';
+    ? 'Book another load (up to 3 concurrent rides)'
+    : 'Where should we deliver?';
 
   const navigateFromDrawer = (route: DrawerRoute) => {
     navigation.navigate(route);
@@ -80,26 +79,28 @@ export function CustomerHomeScreen({ navigation }: Props) {
       }
     }
 
-    const latest = useCustomerStore.getState();
-    if (latest.activeOrderId && latest.activeOrderStatus === 'CANCELLED') {
-      latest.dismissActiveOrder();
+    let ongoingCount = 0;
+    if (user?.id) {
+      try {
+        const response = await api.get('/orders', {
+          params: { customerId: user.id }
+        });
+        const payload = Array.isArray(response.data) ? response.data : [];
+        ongoingCount = payload.filter((item) => ONGOING_ORDER_STATUSES.has(String(item?.status ?? ''))).length;
+      } catch {
+        // Keep a permissive fallback so network errors do not block booking.
+      }
     }
-    const latestStatus = latest.activeOrderStatus;
-    const latestHasOngoing = Boolean(latest.activeOrderId && isOngoingOrderStatus(latestStatus));
-    const latestHasSummaryPending = Boolean(latest.activeOrderId && latestStatus === 'DELIVERED');
-    const shouldBlockBooking = latestHasOngoing || latestHasSummaryPending;
 
-    if (shouldBlockBooking) {
+    if (ongoingCount >= MAX_CONCURRENT_RIDES) {
       Alert.alert(
-        latestHasOngoing ? 'Trip in progress' : 'Trip summary pending',
-        latestHasOngoing
-          ? 'You already have an active goods trip. Please complete it before booking another.'
-          : 'Please close the latest completed trip summary before creating a new booking.',
+        'Ride limit reached',
+        'You can run up to 3 active rides at once. Complete or cancel one ride to create another.',
         [
-          { text: 'Later', style: 'cancel' },
+          { text: 'Not now', style: 'cancel' },
           {
-            text: latestHasOngoing ? 'Resume Trip' : 'View Summary',
-            onPress: () => navigation.navigate('CustomerTracking')
+            text: 'Open Ride History',
+            onPress: () => navigation.navigate('CustomerRides')
           }
         ]
       );

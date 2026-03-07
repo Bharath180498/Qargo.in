@@ -25,6 +25,7 @@ export function OnboardingBankScreen({ navigation }: Props) {
   const storeAccountNumber = useOnboardingStore((state) => state.accountNumber);
   const storeIfscCode = useOnboardingStore((state) => state.ifscCode);
   const storeUpiId = useOnboardingStore((state) => state.upiId);
+  const storeUpiQrImageUrl = useOnboardingStore((state) => state.upiQrImageUrl);
   const error = useOnboardingStore((state) => state.error);
 
   const [accountHolderName, setAccountHolderName] = useState(storeAccountHolderName);
@@ -32,6 +33,7 @@ export function OnboardingBankScreen({ navigation }: Props) {
   const [accountNumber, setAccountNumber] = useState(storeAccountNumber);
   const [ifscCode, setIfscCode] = useState(storeIfscCode);
   const [upiId, setUpiId] = useState(storeUpiId);
+  const [upiQrImageUrl, setUpiQrImageUrl] = useState(storeUpiQrImageUrl);
   const [hasLocalEdits, setHasLocalEdits] = useState(false);
 
   useEffect(() => {
@@ -48,11 +50,28 @@ export function OnboardingBankScreen({ navigation }: Props) {
     setAccountNumber(storeAccountNumber);
     setIfscCode(storeIfscCode);
     setUpiId(storeUpiId);
-  }, [hasLocalEdits, storeAccountHolderName, storeAccountNumber, storeBankName, storeIfscCode, storeUpiId]);
+    setUpiQrImageUrl(storeUpiQrImageUrl);
+  }, [
+    hasLocalEdits,
+    storeAccountHolderName,
+    storeAccountNumber,
+    storeBankName,
+    storeIfscCode,
+    storeUpiId,
+    storeUpiQrImageUrl
+  ]);
 
   const save = async () => {
-    if (!accountHolderName.trim() || !bankName.trim() || !accountNumber.trim() || !ifscCode.trim()) {
+    const normalizedUpi = upiId.trim().toLowerCase();
+    const upiPattern = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/i;
+
+    if (!accountHolderName.trim() || !bankName.trim() || !accountNumber.trim() || !ifscCode.trim() || !normalizedUpi) {
       Alert.alert('Required details missing', 'Complete required payout details to continue.');
+      return;
+    }
+
+    if (!upiPattern.test(normalizedUpi)) {
+      Alert.alert('Invalid UPI ID', 'Enter a valid UPI ID (example: driver@okaxis).');
       return;
     }
 
@@ -62,7 +81,8 @@ export function OnboardingBankScreen({ navigation }: Props) {
         bankName: bankName.trim(),
         accountNumber: accountNumber.trim(),
         ifscCode: ifscCode.trim().toUpperCase(),
-        upiId: upiId.trim()
+        upiId: normalizedUpi,
+        upiQrImageUrl: upiQrImageUrl.trim()
       });
       setHasLocalEdits(false);
       navigation.navigate('OnboardingDocuments');
@@ -120,7 +140,7 @@ export function OnboardingBankScreen({ navigation }: Props) {
             returnKeyType="next"
           />
           <AnimatedTextField
-            label="UPI ID (optional)"
+            label="UPI ID (required)"
             value={upiId}
             onChangeText={(value) => {
               setHasLocalEdits(true);
@@ -130,6 +150,20 @@ export function OnboardingBankScreen({ navigation }: Props) {
             placeholder="ravi@okhdfcbank"
             returnKeyType="done"
           />
+          <AnimatedTextField
+            label="UPI QR image URL (optional)"
+            value={upiQrImageUrl}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setUpiQrImageUrl(value);
+            }}
+            autoCapitalize="none"
+            placeholder="https://.../your-upi-qr.png"
+            returnKeyType="done"
+          />
+          <Text style={styles.helperText}>
+            UPI ID is mandatory. Add QR image URL if you want customers to scan your preferred QR directly.
+          </Text>
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
@@ -160,6 +194,11 @@ const styles = StyleSheet.create({
   errorText: {
     fontFamily: typography.body,
     color: colors.danger,
+    fontSize: 12
+  },
+  helperText: {
+    fontFamily: typography.body,
+    color: colors.mutedText,
     fontSize: 12
   },
   button: {

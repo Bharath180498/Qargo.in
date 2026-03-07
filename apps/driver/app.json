@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "SamaanGaadi Driver",
-    "slug": "samaangaadi-driver",
+    "name": "Qargo Driver",
+    "slug": "qargo-driver",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -11,14 +11,14 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.samaangaadi.driver",
+      "bundleIdentifier": "com.qargo.driver",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "SamaanGaadi Driver uses your location for trip navigation and live tracking.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "SamaanGaadi Driver needs background location while you are online for dispatch and safety."
+        "NSLocationWhenInUseUsageDescription": "Qargo Driver uses your location for trip navigation and live tracking.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Qargo Driver needs background location while you are online for dispatch and safety."
       }
     },
     "android": {
-      "package": "com.samaangaadi.driver",
+      "package": "com.qargo.driver",
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",

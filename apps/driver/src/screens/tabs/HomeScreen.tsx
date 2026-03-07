@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -11,6 +11,20 @@ import {
 import * as Location from 'expo-location';
 import { colors, radius, spacing, typography } from '../../theme';
 import { useDriverAppStore } from '../../store/useDriverAppStore';
+import { openGoogleMapsNavigation } from '../../utils/mapsNavigation';
+
+const actionMap: Array<{ status: string; endpoint: string; label: string; payload?: Record<string, unknown> }> = [
+  { status: 'ASSIGNED', endpoint: 'accept', label: 'Start Trip' },
+  { status: 'DRIVER_EN_ROUTE', endpoint: 'arrived-pickup', label: 'Reached Pickup' },
+  { status: 'ARRIVED_PICKUP', endpoint: 'start-loading', label: 'Start Loading' },
+  { status: 'LOADING', endpoint: 'start-transit', label: 'Start Transit' },
+  {
+    status: 'IN_TRANSIT',
+    endpoint: 'complete',
+    label: 'Complete Delivery',
+    payload: { distanceKm: 14, durationMinutes: 38 }
+  }
+];
 
 export function HomeScreen() {
   const bootstrap = useDriverAppStore((state) => state.bootstrap);
@@ -21,8 +35,37 @@ export function HomeScreen() {
   const updateLocation = useDriverAppStore((state) => state.updateLocation);
   const currentJob = useDriverAppStore((state) => state.currentJob);
   const nextJob = useDriverAppStore((state) => state.nextJob);
+  const pendingOffers = useDriverAppStore((state) => state.pendingOffers);
+  const acceptOffer = useDriverAppStore((state) => state.acceptOffer);
+  const rejectOffer = useDriverAppStore((state) => state.rejectOffer);
+  const runTripAction = useDriverAppStore((state) => state.runTripAction);
+  const [lastKnownLocation, setLastKnownLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [now, setNow] = useState(Date.now());
 
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
+
+  const activeOffer = pendingOffers[0];
+  const activeAction = useMemo(
+    () => actionMap.find((item) => item.status === currentJob?.status),
+    [currentJob?.status]
+  );
+  const offerSecondsLeft = useMemo(() => {
+    if (!activeOffer?.expiresAt) {
+      return 0;
+    }
+    const ms = new Date(activeOffer.expiresAt).getTime() - now;
+    return Math.max(0, Math.floor(ms / 1000));
+  }, [activeOffer?.expiresAt, now]);
+  const offerProgress = useMemo(() => {
+    if (!activeOffer?.expiresAt) {
+      return 0;
+    }
+    const createdMs = activeOffer.createdAt ? new Date(activeOffer.createdAt).getTime() : now;
+    const expiryMs = new Date(activeOffer.expiresAt).getTime();
+    const total = Math.max(1, expiryMs - createdMs);
+    const elapsed = Math.max(0, now - createdMs);
+    return Math.min(1, elapsed / total);
+  }, [activeOffer?.createdAt, activeOffer?.expiresAt, now]);
 
   useEffect(() => {
     void bootstrap();
@@ -35,6 +78,11 @@ export function HomeScreen() {
 
     return () => clearInterval(timer);
   }, [refreshEarnings, refreshJobs]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const startTracking = async () => {
@@ -56,6 +104,11 @@ export function HomeScreen() {
         accuracy: Location.Accuracy.Balanced
       });
 
+      setLastKnownLocation({
+        lat: initialPosition.coords.latitude,
+        lng: initialPosition.coords.longitude
+      });
+
       await updateLocation(initialPosition.coords.latitude, initialPosition.coords.longitude, currentJob?.orderId);
 
       if (locationSubscription.current) {
@@ -69,6 +122,10 @@ export function HomeScreen() {
           distanceInterval: 10
         },
         (position) => {
+          setLastKnownLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
           void updateLocation(position.coords.latitude, position.coords.longitude, currentJob?.orderId);
         }
       );
@@ -84,14 +141,69 @@ export function HomeScreen() {
     };
   }, [availabilityStatus, currentJob?.orderId, updateLocation]);
 
+  const runCurrentAction = async () => {
+    if (!currentJob || !activeAction) {
+      return;
+    }
+
+    try {
+      await runTripAction(currentJob.id, activeAction.endpoint, activeAction.payload);
+    } catch {
+      Alert.alert('Action failed', 'Could not update trip state.');
+    }
+  };
+
+  const quickNavigateCurrent = async () => {
+    if (!currentJob?.order) {
+      Alert.alert('No active trip', 'You do not have an active job to navigate.');
+      return;
+    }
+
+    const toDrop = currentJob.status === 'IN_TRANSIT';
+    const targetLat = toDrop ? currentJob.order.dropLat : currentJob.order.pickupLat;
+    const targetLng = toDrop ? currentJob.order.dropLng : currentJob.order.pickupLng;
+
+    if (typeof targetLat !== 'number' || typeof targetLng !== 'number') {
+      Alert.alert('Location unavailable', 'Trip coordinates are not available yet.');
+      return;
+    }
+
+    await openGoogleMapsNavigation({
+      lat: targetLat,
+      lng: targetLng,
+      originLat: lastKnownLocation?.lat,
+      originLng: lastKnownLocation?.lng
+    });
+  };
+
+  const navigateToOfferPickup = async () => {
+    if (!activeOffer?.order) {
+      Alert.alert('No offer', 'No pickup location found for active offer.');
+      return;
+    }
+
+    await openGoogleMapsNavigation({
+      lat: activeOffer.order.pickupLat,
+      lng: activeOffer.order.pickupLng,
+      originLat: lastKnownLocation?.lat,
+      originLng: lastKnownLocation?.lng
+    });
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Driver Home</Text>
+        <Text style={styles.title}>Qargo Driver</Text>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Availability</Text>
-          <Text style={styles.status}>Status: {availabilityStatus ?? 'OFFLINE'}</Text>
+          <Text style={styles.status}>
+            {availabilityStatus === 'ONLINE'
+              ? 'You are online'
+              : availabilityStatus === 'BUSY'
+                ? 'Trip in progress'
+                : 'You are offline'}
+          </Text>
           <View style={styles.row}>
             <Pressable style={[styles.toggleButton, styles.onlineButton]} onPress={() => void setAvailability('ONLINE')}>
               <Text style={styles.toggleButtonText}>Go Online</Text>
@@ -102,14 +214,64 @@ export function HomeScreen() {
           </View>
         </View>
 
+        <View style={[styles.card, activeOffer ? styles.offerCardHighlight : undefined]}>
+          <View style={styles.offerHeaderRow}>
+            <Text style={styles.cardTitle}>Incoming Job</Text>
+            <Text style={styles.offerTimer}>{offerSecondsLeft}s</Text>
+          </View>
+          {activeOffer ? (
+            <>
+              <Text style={styles.offerMainText}>Pickup: {activeOffer.order?.pickupAddress}</Text>
+              <Text style={styles.offerMetaText}>Drop: {activeOffer.order?.dropAddress}</Text>
+              <Text style={styles.offerMetaText}>
+                ETA {activeOffer.routeEtaMinutes} min • {activeOffer.vehicleMatchType}
+              </Text>
+              <View style={styles.offerProgressTrack}>
+                <View style={[styles.offerProgressFill, { width: `${Math.round(offerProgress * 100)}%` }]} />
+              </View>
+              <View style={styles.row}>
+                <Pressable
+                  style={[styles.toggleButton, styles.onlineButton]}
+                  onPress={() => void acceptOffer(activeOffer.id)}
+                >
+                  <Text style={styles.toggleButtonText}>Accept Job</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.toggleButton, styles.offlineButton]}
+                  onPress={() => void rejectOffer(activeOffer.id)}
+                >
+                  <Text style={[styles.toggleButtonText, { color: colors.accent }]}>Skip</Text>
+                </Pressable>
+              </View>
+              <Pressable style={styles.navButton} onPress={() => void navigateToOfferPickup()}>
+                <Text style={styles.navButtonText}>Open Pickup in Google Maps</Text>
+              </Pressable>
+              {pendingOffers.length > 1 ? (
+                <Text style={styles.offerQueueNote}>+{pendingOffers.length - 1} more offer(s) waiting</Text>
+              ) : null}
+            </>
+          ) : (
+            <Text style={styles.info}>No incoming jobs right now. Keep app open and stay online.</Text>
+          )}
+        </View>
+
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Current Job</Text>
+          <Text style={styles.cardTitle}>Current Trip</Text>
           {currentJob ? (
             <>
-              <Text style={styles.info}>Trip ID: {currentJob.id}</Text>
               <Text style={styles.info}>Pickup: {currentJob.order?.pickupAddress}</Text>
               <Text style={styles.info}>Drop: {currentJob.order?.dropAddress}</Text>
               <Text style={styles.info}>Stage: {currentJob.status}</Text>
+              <Pressable style={styles.navButton} onPress={() => void quickNavigateCurrent()}>
+                <Text style={styles.navButtonText}>
+                  {currentJob.status === 'IN_TRANSIT' ? 'Navigate to Drop' : 'Navigate to Pickup'}
+                </Text>
+              </Pressable>
+              {activeAction ? (
+                <Pressable style={styles.mainActionButton} onPress={() => void runCurrentAction()}>
+                  <Text style={styles.mainActionText}>{activeAction.label}</Text>
+                </Pressable>
+              ) : null}
             </>
           ) : (
             <Text style={styles.info}>No active trip. Stay online to receive offers.</Text>
@@ -136,7 +298,7 @@ export function HomeScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.paper },
   container: { padding: spacing.lg, gap: spacing.md },
-  title: { fontFamily: typography.heading, color: colors.accent, fontSize: 28 },
+  title: { fontFamily: typography.heading, color: colors.accent, fontSize: 30 },
   card: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
@@ -147,6 +309,45 @@ const styles = StyleSheet.create({
   },
   cardTitle: { fontFamily: typography.bodyBold, color: colors.accent },
   status: { fontFamily: typography.body, color: colors.secondary },
+  offerCardHighlight: {
+    borderColor: '#FDBA74',
+    backgroundColor: '#FFF7ED'
+  },
+  offerHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  offerTimer: {
+    fontFamily: typography.bodyBold,
+    color: '#B45309'
+  },
+  offerMainText: {
+    fontFamily: typography.bodyBold,
+    color: colors.accent
+  },
+  offerMetaText: {
+    fontFamily: typography.body,
+    color: colors.mutedText,
+    fontSize: 13
+  },
+  offerProgressTrack: {
+    width: '100%',
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#FED7AA',
+    overflow: 'hidden',
+    marginTop: spacing.xs
+  },
+  offerProgressFill: {
+    height: '100%',
+    backgroundColor: '#F97316'
+  },
+  offerQueueNote: {
+    fontFamily: typography.body,
+    color: colors.mutedText,
+    fontSize: 12
+  },
   row: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
   toggleButton: {
     flex: 1,
@@ -164,5 +365,29 @@ const styles = StyleSheet.create({
     fontFamily: typography.bodyBold,
     color: colors.white
   },
-  info: { fontFamily: typography.body, color: colors.mutedText }
+  info: { fontFamily: typography.body, color: colors.mutedText },
+  navButton: {
+    marginTop: spacing.xs,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.secondary,
+    alignItems: 'center',
+    paddingVertical: spacing.xs,
+    backgroundColor: '#ECFDF5'
+  },
+  navButtonText: {
+    fontFamily: typography.bodyBold,
+    color: colors.secondary
+  },
+  mainActionButton: {
+    marginTop: spacing.xs,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.primary
+  },
+  mainActionText: {
+    fontFamily: typography.bodyBold,
+    color: colors.white
+  }
 });

@@ -10,12 +10,12 @@ interface BrandHeaderProps {
 export function BrandHeader({ title, subtitle }: BrandHeaderProps) {
   return (
     <LinearGradient
-      colors={['#F97316', '#FB923C', '#0F766E']}
+      colors={['#E76F00', '#F39C3D', '#0B6B5A']}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
       style={styles.container}
     >
-      <Text style={styles.brand}>PORTERX BHARAT</Text>
+      <Text style={styles.brand}>QARGO INDIA</Text>
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.subtitle}>{subtitle}</Text>
     </LinearGradient>

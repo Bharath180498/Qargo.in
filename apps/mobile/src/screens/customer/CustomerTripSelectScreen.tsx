@@ -13,7 +13,7 @@ import type { InsurancePlan, VehicleType } from '@porter/shared';
 import { VEHICLE_UI_META } from '@porter/shared';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types/navigation';
-import { type PaymentMethod, useCustomerStore } from '../../store/useCustomerStore';
+import { type PaymentMethod, isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
 import MapView, { Marker, Polyline } from '../../components/maps';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerTripSelect'>;
@@ -78,6 +78,8 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
     insuranceSelected,
     minDriverRating,
     paymentMethod,
+    activeOrderId,
+    activeOrderStatus,
     createBooking,
     creating,
     estimateLoading,
@@ -113,6 +115,18 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
   );
 
   const submitBooking = async () => {
+    if (activeOrderId && isOngoingOrderStatus(activeOrderStatus)) {
+      Alert.alert(
+        'Trip already active',
+        'You already have an ongoing trip. Please complete it before booking another.',
+        [
+          { text: 'OK', style: 'cancel' },
+          { text: 'Go to Tracking', onPress: () => navigation.navigate('CustomerTracking') }
+        ]
+      );
+      return;
+    }
+
     if (!selectedVehicle) {
       Alert.alert('Select a vehicle', 'Choose one vehicle option to continue.');
       return;

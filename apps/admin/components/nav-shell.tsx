@@ -15,7 +15,7 @@ export function NavShell({ children }: { children: ReactNode }) {
       <header className="mb-8 rounded-3xl border border-orange-200 bg-white/90 p-6 shadow-soft backdrop-blur">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.3em] text-orange-400">PorterX Ops</p>
+            <p className="text-xs font-bold uppercase tracking-[0.3em] text-orange-400">Qargo Ops</p>
             <h1 className="font-sora text-3xl text-brand-accent">Marketplace Control Center</h1>
             <p className="font-manrope text-slate-600">
               Live dispatch health, driver quality, and revenue levers in one place.

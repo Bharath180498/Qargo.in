@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   SafeAreaView,
   StyleSheet,
@@ -36,11 +37,34 @@ export function CustomerPaymentScreen({ navigation }: Props) {
 
   const buttonLabel = useMemo(() => {
     if (orderId && estimatedPrice) {
+      if (selectedMethod === 'UPI_SCAN_PAY') {
+        return `Pay INR ${estimatedPrice.toFixed(2)} via UPI`;
+      }
       return `Pay INR ${estimatedPrice.toFixed(2)}`;
     }
 
     return 'Done';
-  }, [estimatedPrice, orderId]);
+  }, [estimatedPrice, orderId, selectedMethod]);
+
+  const askForUpiConfirmation = () =>
+    new Promise<boolean>((resolve) => {
+      Alert.alert(
+        'UPI Payment',
+        'Did the UPI app show payment success?',
+        [
+          {
+            text: 'No',
+            style: 'cancel',
+            onPress: () => resolve(false)
+          },
+          {
+            text: 'Yes, paid',
+            onPress: () => resolve(true)
+          }
+        ],
+        { cancelable: false }
+      );
+    });
 
   const onSubmit = async () => {
     if (!orderId || !estimatedPrice) {
@@ -50,19 +74,48 @@ export function CustomerPaymentScreen({ navigation }: Props) {
 
     setSubmitting(true);
     try {
+      const provider =
+        selectedMethod === 'UPI_SCAN_PAY'
+          ? 'UPI'
+          : selectedMethod === 'CASH'
+            ? 'WALLET'
+            : 'RAZORPAY';
+
       const intent = await api.post('/payments/create-intent', {
         orderId,
-        provider: selectedMethod === 'UPI_SCAN_PAY' ? 'UPI' : selectedMethod === 'CASH' ? 'WALLET' : 'RAZORPAY',
+        provider,
         amount: estimatedPrice
       });
 
+      let success = true;
+      let providerReference = `PAY_${Date.now()}`;
+
+      if (provider === 'UPI') {
+        const upiIntentUrl = intent.data?.upiIntentUrl as string | undefined;
+        if (upiIntentUrl) {
+          const canOpen = await Linking.canOpenURL(upiIntentUrl);
+          if (canOpen) {
+            await Linking.openURL(upiIntentUrl);
+          }
+        }
+
+        success = await askForUpiConfirmation();
+        providerReference = `UPI_${Date.now()}`;
+      } else if (provider === 'RAZORPAY') {
+        providerReference = String(intent.data?.providerRef ?? providerReference);
+      }
+
       await api.post('/payments/confirm', {
         paymentId: intent.data.paymentId,
-        success: true,
-        providerReference: `PAY_${Date.now()}`
+        success,
+        providerReference
       });
 
-      Alert.alert('Payment Complete', 'Payment confirmed for this order.');
+      if (success) {
+        Alert.alert('Payment Complete', 'Payment confirmed for this order.');
+      } else {
+        Alert.alert('Payment Pending', 'UPI payment is marked pending/failed. You can retry from tracking.');
+      }
       navigation.goBack();
     } catch {
       Alert.alert('Payment failed', 'Could not confirm payment right now.');

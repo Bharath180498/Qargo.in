@@ -40,6 +40,33 @@ export class OrdersService {
     return earthRadiusKm * c;
   }
 
+  private isOngoingOrderStatus(status: OrderStatus) {
+    switch (status) {
+      case OrderStatus.CREATED:
+      case OrderStatus.MATCHING:
+      case OrderStatus.ASSIGNED:
+      case OrderStatus.AT_PICKUP:
+      case OrderStatus.LOADING:
+      case OrderStatus.IN_TRANSIT:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private isDriverAssignedStatus(status: OrderStatus) {
+    switch (status) {
+      case OrderStatus.ASSIGNED:
+      case OrderStatus.AT_PICKUP:
+      case OrderStatus.LOADING:
+      case OrderStatus.IN_TRANSIT:
+      case OrderStatus.DELIVERED:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   async estimate(payload: EstimateOrderDto) {
     const vehicleTypes: VehicleType[] = payload.vehicleType
       ? [payload.vehicleType]
@@ -101,6 +128,43 @@ export class OrdersService {
   }
 
   async create(payload: CreateOrderDto) {
+    const existingActiveOrder = await this.prisma.order.findFirst({
+      where: {
+        customerId: payload.customerId,
+        status: {
+          in: [
+            OrderStatus.CREATED,
+            OrderStatus.MATCHING,
+            OrderStatus.ASSIGNED,
+            OrderStatus.AT_PICKUP,
+            OrderStatus.LOADING,
+            OrderStatus.IN_TRANSIT
+          ]
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    if (existingActiveOrder) {
+      const assignment =
+        existingActiveOrder.status === OrderStatus.MATCHING
+          ? await this.dispatchService.assignOrder(existingActiveOrder.id)
+          : {
+              assigned: this.isDriverAssignedStatus(existingActiveOrder.status),
+              mode: 'EXISTING_ACTIVE',
+              reason: 'ACTIVE_ORDER_EXISTS'
+            };
+
+      return {
+        order_id: existingActiveOrder.id,
+        order_status: existingActiveOrder.status,
+        estimated_price: Number(existingActiveOrder.estimatedPrice),
+        driver_assigned: this.isDriverAssignedStatus(existingActiveOrder.status),
+        dispatch_mode: 'EXISTING_ACTIVE',
+        assignment
+      };
+    }
+
     const insurancePlan = payload.insuranceSelected ?? InsurancePlan.NONE;
     const distanceKm = this.computeDistanceKm(payload.pickup, payload.drop);
     const scheduledAt = payload.scheduledAt ? new Date(payload.scheduledAt) : null;
@@ -149,6 +213,7 @@ export class OrdersService {
 
     return {
       order_id: order.id,
+      order_status: order.status,
       estimated_price: Number(order.estimatedPrice),
       driver_assigned: assignment.assigned,
       dispatch_mode: assignment.mode ?? null,
@@ -173,6 +238,22 @@ export class OrdersService {
   }
 
   async findById(orderId: string) {
+    const existing = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        status: true
+      }
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (existing.status === OrderStatus.MATCHING) {
+      await this.dispatchService.assignOrder(orderId);
+    }
+
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
@@ -330,7 +411,15 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    const generated = this.ewayBillService.generate(payload);
+    const generated = await this.ewayBillService.generate(payload);
+    const ewayBillNumber =
+      typeof (generated as { ewayBillNumber?: unknown }).ewayBillNumber === 'string'
+        ? (generated as { ewayBillNumber: string }).ewayBillNumber
+        : undefined;
+
+    if (!ewayBillNumber) {
+      throw new NotFoundException('E-way bill provider did not return a bill number');
+    }
 
     return this.prisma.order.update({
       where: { id: orderId },
@@ -338,7 +427,7 @@ export class OrdersService {
         gstin: payload.gstin,
         invoiceValue: payload.invoiceValue,
         hsnCode: payload.hsnCode,
-        ewayBillNumber: generated.ewayBillNumber
+        ewayBillNumber
       }
     });
   }

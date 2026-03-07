@@ -7,9 +7,27 @@ const Stack = createNativeStackNavigator<AuthStackParamList>();
 
 export function AuthNavigator() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="DriverPhone" component={DriverPhoneScreen} />
-      <Stack.Screen name="DriverOtp" component={DriverOtpScreen} />
+    <Stack.Navigator
+      screenOptions={{
+        headerShown: true,
+        headerShadowVisible: false
+      }}
+    >
+      <Stack.Screen
+        name="DriverPhone"
+        component={DriverPhoneScreen}
+        options={{
+          title: 'Driver Sign In',
+          headerBackVisible: false
+        }}
+      />
+      <Stack.Screen
+        name="DriverOtp"
+        component={DriverOtpScreen}
+        options={{
+          title: 'Verify OTP'
+        }}
+      />
     </Stack.Navigator>
   );
 }

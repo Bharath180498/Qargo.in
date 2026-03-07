@@ -77,7 +77,7 @@ export class NotificationsService {
       return [];
     }
 
-    const title = 'SamaanGaadi';
+    const title = 'Qargo';
     const body = `New update: ${event.replace(/_/g, ' ')}`;
     const sends = await Promise.all(
       tokens.map(async (tokenEntry) => {

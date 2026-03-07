@@ -3,16 +3,16 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
-  TextInput,
   View
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, radius, spacing, typography } from '../../theme';
 import type { OnboardingStackParamList } from '../../types';
 import { useOnboardingStore } from '../../store/useOnboardingStore';
+import { AnimatedTextField } from '../../components/AnimatedTextField';
+import { FormScreen } from '../../components/FormScreen';
 
 type Props = NativeStackScreenProps<OnboardingStackParamList, 'OnboardingBank'>;
 
@@ -20,75 +20,134 @@ export function OnboardingBankScreen({ navigation }: Props) {
   const loading = useOnboardingStore((state) => state.loading);
   const load = useOnboardingStore((state) => state.load);
   const updateBank = useOnboardingStore((state) => state.updateBank);
-  const state = useOnboardingStore((store) => ({
-    accountHolderName: store.accountHolderName,
-    bankName: store.bankName,
-    accountNumber: store.accountNumber,
-    ifscCode: store.ifscCode,
-    upiId: store.upiId
-  }));
+  const storeAccountHolderName = useOnboardingStore((state) => state.accountHolderName);
+  const storeBankName = useOnboardingStore((state) => state.bankName);
+  const storeAccountNumber = useOnboardingStore((state) => state.accountNumber);
+  const storeIfscCode = useOnboardingStore((state) => state.ifscCode);
+  const storeUpiId = useOnboardingStore((state) => state.upiId);
+  const error = useOnboardingStore((state) => state.error);
 
-  const [accountHolderName, setAccountHolderName] = useState(state.accountHolderName);
-  const [bankName, setBankName] = useState(state.bankName);
-  const [accountNumber, setAccountNumber] = useState(state.accountNumber);
-  const [ifscCode, setIfscCode] = useState(state.ifscCode);
-  const [upiId, setUpiId] = useState(state.upiId);
+  const [accountHolderName, setAccountHolderName] = useState(storeAccountHolderName);
+  const [bankName, setBankName] = useState(storeBankName);
+  const [accountNumber, setAccountNumber] = useState(storeAccountNumber);
+  const [ifscCode, setIfscCode] = useState(storeIfscCode);
+  const [upiId, setUpiId] = useState(storeUpiId);
+  const [hasLocalEdits, setHasLocalEdits] = useState(false);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    setAccountHolderName(state.accountHolderName);
-    setBankName(state.bankName);
-    setAccountNumber(state.accountNumber);
-    setIfscCode(state.ifscCode);
-    setUpiId(state.upiId);
-  }, [state.accountHolderName, state.accountNumber, state.bankName, state.ifscCode, state.upiId]);
+    if (hasLocalEdits) {
+      return;
+    }
+
+    setAccountHolderName(storeAccountHolderName);
+    setBankName(storeBankName);
+    setAccountNumber(storeAccountNumber);
+    setIfscCode(storeIfscCode);
+    setUpiId(storeUpiId);
+  }, [hasLocalEdits, storeAccountHolderName, storeAccountNumber, storeBankName, storeIfscCode, storeUpiId]);
 
   const save = async () => {
+    if (!accountHolderName.trim() || !bankName.trim() || !accountNumber.trim() || !ifscCode.trim()) {
+      Alert.alert('Required details missing', 'Complete required payout details to continue.');
+      return;
+    }
+
     try {
       await updateBank({
-        accountHolderName,
-        bankName,
-        accountNumber,
-        ifscCode,
-        upiId
+        accountHolderName: accountHolderName.trim(),
+        bankName: bankName.trim(),
+        accountNumber: accountNumber.trim(),
+        ifscCode: ifscCode.trim().toUpperCase(),
+        upiId: upiId.trim()
       });
+      setHasLocalEdits(false);
       navigation.navigate('OnboardingDocuments');
     } catch {
-      Alert.alert('Could not save', 'Please check payout details and retry.');
+      const latestError = useOnboardingStore.getState().error;
+      Alert.alert('Could not save', latestError ?? 'Please check payout details and retry.');
     }
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <FormScreen>
       <View style={styles.container}>
         <Text style={styles.title}>Onboarding: Payout</Text>
         <View style={styles.card}>
-          <Text style={styles.label}>Account Holder</Text>
-          <TextInput style={styles.input} value={accountHolderName} onChangeText={setAccountHolderName} />
-          <Text style={styles.label}>Bank Name</Text>
-          <TextInput style={styles.input} value={bankName} onChangeText={setBankName} />
-          <Text style={styles.label}>Account Number</Text>
-          <TextInput style={styles.input} value={accountNumber} onChangeText={setAccountNumber} keyboardType="number-pad" />
-          <Text style={styles.label}>IFSC Code</Text>
-          <TextInput style={styles.input} value={ifscCode} onChangeText={setIfscCode} autoCapitalize="characters" />
-          <Text style={styles.label}>UPI ID (optional)</Text>
-          <TextInput style={styles.input} value={upiId} onChangeText={setUpiId} autoCapitalize="none" />
+          <AnimatedTextField
+            label="Account Holder"
+            value={accountHolderName}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setAccountHolderName(value);
+            }}
+            placeholder="Ravi Kumar"
+            returnKeyType="next"
+          />
+          <AnimatedTextField
+            label="Bank Name"
+            value={bankName}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setBankName(value);
+            }}
+            placeholder="HDFC Bank"
+            returnKeyType="next"
+          />
+          <AnimatedTextField
+            label="Account Number"
+            value={accountNumber}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setAccountNumber(value);
+            }}
+            keyboardType="number-pad"
+            placeholder="123456789000"
+            returnKeyType="next"
+          />
+          <AnimatedTextField
+            label="IFSC Code"
+            value={ifscCode}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setIfscCode(value);
+            }}
+            autoCapitalize="characters"
+            placeholder="HDFC0000123"
+            returnKeyType="next"
+          />
+          <AnimatedTextField
+            label="UPI ID (optional)"
+            value={upiId}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setUpiId(value);
+            }}
+            autoCapitalize="none"
+            placeholder="ravi@okhdfcbank"
+            returnKeyType="done"
+          />
+
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
           <Pressable style={styles.button} onPress={() => void save()} disabled={loading}>
-            {loading ? <ActivityIndicator color={colors.white} /> : <Text style={styles.buttonText}>Save & Continue</Text>}
+            {loading ? (
+              <ActivityIndicator color={colors.white} />
+            ) : (
+              <Text style={styles.buttonText}>Save & Continue</Text>
+            )}
           </Pressable>
         </View>
       </View>
-    </SafeAreaView>
+    </FormScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.paper },
-  container: { flex: 1, padding: spacing.lg, justifyContent: 'center', gap: spacing.md },
+  container: { gap: spacing.md },
   title: { fontFamily: typography.heading, fontSize: 28, color: colors.accent },
   card: {
     backgroundColor: colors.white,
@@ -98,15 +157,10 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     gap: spacing.xs
   },
-  label: { fontFamily: typography.bodyBold, color: colors.accent },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    backgroundColor: '#FFF7ED',
-    fontFamily: typography.body
+  errorText: {
+    fontFamily: typography.body,
+    color: colors.danger,
+    fontSize: 12
   },
   button: {
     marginTop: spacing.sm,

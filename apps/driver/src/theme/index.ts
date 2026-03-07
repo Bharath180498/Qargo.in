@@ -1,11 +1,13 @@
 export const colors = {
-  primary: '#F97316',
-  secondary: '#0F766E',
-  accent: '#0F172A',
-  paper: '#FFF8F1',
+  primary: '#E76F00',
+  secondary: '#0B6B5A',
+  accent: '#1E293B',
+  paper: '#FFF9F2',
+  canvas: '#FDEFD8',
   white: '#FFFFFF',
   mutedText: '#475569',
-  border: '#FDBA74',
+  card: '#FFF6EA',
+  border: '#F4B97A',
   danger: '#DC2626',
   success: '#16A34A',
   warning: '#D97706'

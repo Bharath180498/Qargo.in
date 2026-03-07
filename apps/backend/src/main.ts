@@ -17,7 +17,7 @@ async function bootstrap() {
   );
 
   const config = new DocumentBuilder()
-    .setTitle('Porter Marketplace API')
+    .setTitle('Qargo Marketplace API')
     .setDescription('Logistics marketplace backend APIs')
     .setVersion('1.0.0')
     .addBearerAuth()

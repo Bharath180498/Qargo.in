@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Headers, Post } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
@@ -18,7 +18,21 @@ export class PaymentsController {
   }
 
   @Post('webhooks/razorpay')
-  webhook(@Body() payload: { event: string; providerRef?: string; success?: boolean }) {
-    return this.paymentsService.handleRazorpayWebhook(payload);
+  webhook(
+    @Body() payload: {
+      event: string;
+      providerRef?: string;
+      payload?: {
+        payment?: {
+          entity?: {
+            order_id?: string;
+          };
+        };
+      };
+      success?: boolean;
+    },
+    @Headers('x-razorpay-signature') signature?: string
+  ) {
+    return this.paymentsService.handleRazorpayWebhook(payload, signature);
   }
 }

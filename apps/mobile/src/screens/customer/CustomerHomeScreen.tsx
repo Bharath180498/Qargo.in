@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types/navigation';
-import { type RoutePoint, useCustomerStore } from '../../store/useCustomerStore';
+import { type RoutePoint, isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerHome'>;
 
@@ -34,13 +34,39 @@ const SERVICES = [
 
 export function CustomerHomeScreen({ navigation }: Props) {
   const setDraftRoute = useCustomerStore((state) => state.setDraftRoute);
-  const resetBookingFlow = useCustomerStore((state) => state.resetBookingFlow);
+  const activeOrderId = useCustomerStore((state) => state.activeOrderId);
+  const activeOrderStatus = useCustomerStore((state) => state.activeOrderStatus);
+  const syncActiveOrder = useCustomerStore((state) => state.syncActiveOrder);
+  const refreshOrder = useCustomerStore((state) => state.refreshOrder);
 
   useEffect(() => {
-    resetBookingFlow();
-  }, [resetBookingFlow]);
+    void syncActiveOrder();
+  }, [syncActiveOrder]);
+
+  useEffect(() => {
+    if (activeOrderId) {
+      void refreshOrder();
+    }
+  }, [activeOrderId, refreshOrder]);
+
+  const hasOngoingOrder = Boolean(activeOrderId && isOngoingOrderStatus(activeOrderStatus));
 
   const startBookingFlow = (drop?: RoutePoint) => {
+    if (hasOngoingOrder) {
+      Alert.alert(
+        'Trip in progress',
+        'You already have an active goods trip. Please complete it before booking another.',
+        [
+          { text: 'Later', style: 'cancel' },
+          {
+            text: 'Resume Trip',
+            onPress: () => navigation.navigate('CustomerTracking')
+          }
+        ]
+      );
+      return;
+    }
+
     setDraftRoute({
       pickup: null,
       drop: drop ?? null,
@@ -56,7 +82,7 @@ export function CustomerHomeScreen({ navigation }: Props) {
       <View style={styles.container}>
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           <View style={styles.headlineSection}>
-            <Text style={styles.headlineEyebrow}>PORTERX BHARAT</Text>
+            <Text style={styles.headlineEyebrow}>QARGO KARNATAKA</Text>
             <Text style={styles.headlineTitle}>Move goods fast across the city, without the calling chase.</Text>
             <Text style={styles.headlineSubtitle}>
               Live trucks, transparent pricing, and GST-ready workflows built for Indian businesses.
@@ -75,10 +101,30 @@ export function CustomerHomeScreen({ navigation }: Props) {
             </View>
           </View>
 
+          {hasOngoingOrder ? (
+            <View style={styles.ongoingCard}>
+              <View style={styles.ongoingHeader}>
+                <Text style={styles.ongoingTitle}>Ongoing trip</Text>
+                <Text style={styles.ongoingStatus}>{activeOrderStatus ?? 'MATCHING'}</Text>
+              </View>
+              <Text style={styles.ongoingSubtitle}>Your current booking is active. Resume to track driver and payment.</Text>
+              <View style={styles.ongoingActions}>
+                <Pressable style={styles.ongoingPrimaryButton} onPress={() => navigation.navigate('CustomerTracking')}>
+                  <Text style={styles.ongoingPrimaryText}>Resume trip</Text>
+                </Pressable>
+                <Pressable style={styles.ongoingSecondaryButton} onPress={() => navigation.navigate('CustomerPayment')}>
+                  <Text style={styles.ongoingSecondaryText}>Payments</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
           <Pressable style={styles.searchCard} onPress={() => startBookingFlow()}>
             <View>
-              <Text style={styles.searchLabel}>Pick-up and drop</Text>
-              <Text style={styles.searchTitle}>Where should we deliver?</Text>
+              <Text style={styles.searchLabel}>{hasOngoingOrder ? 'Active trip in progress' : 'Pick-up and drop'}</Text>
+              <Text style={styles.searchTitle}>
+                {hasOngoingOrder ? 'Complete current trip to book again' : 'Where should we deliver?'}
+              </Text>
             </View>
             <View style={styles.searchArrowWrap}>
               <Text style={styles.searchArrow}>{'>'}</Text>
@@ -224,6 +270,66 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_700Bold',
     color: '#ECFEFF',
     fontSize: 16
+  },
+  ongoingCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    backgroundColor: '#F0FDF4',
+    padding: 14,
+    gap: 8
+  },
+  ongoingHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  ongoingTitle: {
+    fontFamily: 'Sora_700Bold',
+    color: '#166534',
+    fontSize: 16
+  },
+  ongoingStatus: {
+    fontFamily: 'Manrope_700Bold',
+    color: '#0F766E',
+    fontSize: 12
+  },
+  ongoingSubtitle: {
+    fontFamily: 'Manrope_500Medium',
+    color: '#14532D',
+    fontSize: 13
+  },
+  ongoingActions: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  ongoingPrimaryButton: {
+    flex: 1,
+    borderRadius: 10,
+    backgroundColor: '#0F766E',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10
+  },
+  ongoingPrimaryText: {
+    fontFamily: 'Manrope_700Bold',
+    color: '#ECFEFF',
+    fontSize: 13
+  },
+  ongoingSecondaryButton: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#0F766E',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF'
+  },
+  ongoingSecondaryText: {
+    fontFamily: 'Manrope_700Bold',
+    color: '#0F766E',
+    fontSize: 13
   },
   sectionHeader: {
     flexDirection: 'row',

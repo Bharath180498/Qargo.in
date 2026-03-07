@@ -18,19 +18,67 @@ type Props = NativeStackScreenProps<OnboardingStackParamList, 'OnboardingDocumen
 
 const requiredDocs = ['AADHAAR_FRONT', 'LICENSE_FRONT', 'RC_FRONT', 'SELFIE'];
 
+function normalizeType(value: string) {
+  return value.trim().toUpperCase();
+}
+
 export function OnboardingDocumentsScreen({ navigation }: Props) {
   const loading = useOnboardingStore((state) => state.loading);
   const load = useOnboardingStore((state) => state.load);
   const uploadDoc = useOnboardingStore((state) => state.uploadDoc);
   const submit = useOnboardingStore((state) => state.submit);
   const uploadedDocs = useOnboardingStore((state) => state.uploadedDocs);
+  const fullName = useOnboardingStore((state) => state.fullName);
+  const phone = useOnboardingStore((state) => state.phone);
+  const vehicleType = useOnboardingStore((state) => state.vehicleType);
+  const vehicleNumber = useOnboardingStore((state) => state.vehicleNumber);
+  const licenseNumber = useOnboardingStore((state) => state.licenseNumber);
+  const accountHolderName = useOnboardingStore((state) => state.accountHolderName);
+  const bankName = useOnboardingStore((state) => state.bankName);
+  const accountNumber = useOnboardingStore((state) => state.accountNumber);
+  const ifscCode = useOnboardingStore((state) => state.ifscCode);
+  const error = useOnboardingStore((state) => state.error);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const uploadedSet = useMemo(() => new Set(uploadedDocs), [uploadedDocs]);
-  const allUploaded = requiredDocs.every((doc) => uploadedSet.has(doc));
+  const uploadedSet = useMemo(
+    () => new Set(uploadedDocs.map((docType) => normalizeType(docType))),
+    [uploadedDocs]
+  );
+  const missingDocs = useMemo(
+    () => requiredDocs.filter((doc) => !uploadedSet.has(normalizeType(doc))),
+    [uploadedSet]
+  );
+  const allUploaded = missingDocs.length === 0;
+  const missingOnboardingFields = useMemo(
+    () =>
+      [
+        ['full name', fullName],
+        ['phone', phone],
+        ['vehicle type', vehicleType],
+        ['vehicle number', vehicleNumber],
+        ['license number', licenseNumber],
+        ['account holder', accountHolderName],
+        ['bank name', bankName],
+        ['account number', accountNumber],
+        ['IFSC code', ifscCode]
+      ]
+        .filter(([, value]) => !String(value ?? '').trim())
+        .map(([label]) => label),
+    [
+      accountHolderName,
+      accountNumber,
+      bankName,
+      fullName,
+      ifscCode,
+      licenseNumber,
+      phone,
+      vehicleNumber,
+      vehicleType
+    ]
+  );
 
   const upload = async (type: string) => {
     try {
@@ -41,11 +89,33 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
   };
 
   const submitForReview = async () => {
+    if (!allUploaded) {
+      Alert.alert(
+        'Upload remaining documents',
+        `Please upload: ${missingDocs.map((item) => item.replace(/_/g, ' ')).join(', ')}`
+      );
+      return;
+    }
+
+    if (missingOnboardingFields.length > 0) {
+      Alert.alert(
+        'Complete onboarding details',
+        `Missing: ${missingOnboardingFields.join(', ')}`
+      );
+      return;
+    }
+
     try {
       await submit();
       navigation.navigate('OnboardingStatus');
     } catch {
-      Alert.alert('Submit failed', 'Please complete all onboarding details before submitting.');
+      const latestError = useOnboardingStore.getState().error;
+      Alert.alert(
+        'Submit failed',
+        latestError ??
+          error ??
+          'Please complete profile, vehicle, and payout details before submitting for review.'
+      );
     }
   };
 
@@ -66,7 +136,7 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
                     {isUploaded ? 'Uploaded' : 'Pending'}
                   </Text>
                 </View>
-                <Pressable style={styles.uploadButton} onPress={() => void upload(docType)}>
+                <Pressable style={styles.uploadButton} onPress={() => void upload(docType)} disabled={loading}>
                   <Text style={styles.uploadButtonText}>{isUploaded ? 'Re-upload' : 'Upload'}</Text>
                 </Pressable>
               </View>
@@ -74,13 +144,21 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
           })}
         </View>
 
-        <Pressable style={[styles.submitButton, !allUploaded && styles.submitButtonDisabled]} onPress={() => void submitForReview()} disabled={loading || !allUploaded}>
+        <Pressable style={[styles.submitButton, !allUploaded && styles.submitButtonDisabled]} onPress={() => void submitForReview()} disabled={loading}>
           {loading ? <ActivityIndicator color={colors.white} /> : <Text style={styles.submitButtonText}>Submit for KYC Review</Text>}
         </Pressable>
 
         {!allUploaded ? (
-          <Text style={styles.hint}>All required documents must be uploaded before submission.</Text>
+          <Text style={styles.hint}>
+            Missing: {missingDocs.map((item) => item.replace(/_/g, ' ')).join(', ')}
+          </Text>
         ) : null}
+        {missingOnboardingFields.length > 0 ? (
+          <Text style={styles.hint}>
+            Complete before submit: {missingOnboardingFields.join(', ')}
+          </Text>
+        ) : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -155,6 +233,11 @@ const styles = StyleSheet.create({
   hint: {
     fontFamily: typography.body,
     color: colors.mutedText,
+    fontSize: 12
+  },
+  error: {
+    fontFamily: typography.body,
+    color: '#B91C1C',
     fontSize: 12
   }
 });

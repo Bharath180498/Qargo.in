@@ -1,7 +1,6 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { DriverTabParamList } from '../types';
 import { HomeScreen } from '../screens/tabs/HomeScreen';
-import { JobsScreen } from '../screens/tabs/JobsScreen';
 import { EarningsScreen } from '../screens/tabs/EarningsScreen';
 import { HistoryScreen } from '../screens/tabs/HistoryScreen';
 import { ProfileScreen } from '../screens/tabs/ProfileScreen';
@@ -28,7 +27,6 @@ export function DriverTabs() {
       }}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="Jobs" component={JobsScreen} />
       <Tab.Screen name="Earnings" component={EarningsScreen} />
       <Tab.Screen name="History" component={HistoryScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />

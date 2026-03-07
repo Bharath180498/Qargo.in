@@ -4,12 +4,12 @@ import { KycController } from './kyc.controller';
 import { KycService } from './kyc.service';
 import { IdfyProvider } from './providers/idfy.provider';
 import { MockIdfyProvider } from './providers/mock-idfy.provider';
+import { CashfreeProvider } from './providers/cashfree.provider';
 
 @Module({
   imports: [DriverOnboardingModule],
   controllers: [KycController],
-  providers: [KycService, IdfyProvider, MockIdfyProvider],
+  providers: [KycService, IdfyProvider, MockIdfyProvider, CashfreeProvider],
   exports: [KycService]
 })
 export class KycModule {}
-

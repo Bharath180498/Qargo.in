@@ -44,7 +44,9 @@ export default function App() {
     }
   }, [refreshOnboardingStatus, token, user?.id]);
 
-  if (!soraLoaded || !manropeLoaded || loading) {
+  const blockForOnboardingRefresh = Boolean(token && loading && !onboardingStatus);
+
+  if (!soraLoaded || !manropeLoaded || blockForOnboardingRefresh) {
     return <LoadingScreen />;
   }
 

@@ -13,7 +13,6 @@ export type OnboardingStackParamList = {
 
 export type DriverTabParamList = {
   Home: undefined;
-  Jobs: undefined;
   Earnings: undefined;
   History: undefined;
   Profile: undefined;
@@ -30,4 +29,6 @@ export interface OtpRequestResponse {
   otpSessionId: string;
   expiresAt: string;
   code?: string;
+  provider?: 'mock' | 'twilio';
+  deliveryStatus?: 'SENT' | 'FALLBACK';
 }

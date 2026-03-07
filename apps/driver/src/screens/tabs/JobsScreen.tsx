@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { colors, radius, spacing, typography } from '../../theme';
 import { useDriverAppStore } from '../../store/useDriverAppStore';
+import { openGoogleMapsNavigation } from '../../utils/mapsNavigation';
 
 const actionMap: Array<{ status: string; endpoint: string; label: string; payload?: Record<string, unknown> }> = [
   { status: 'ASSIGNED', endpoint: 'accept', label: 'Accept Job' },
@@ -37,6 +38,25 @@ export function JobsScreen() {
     () => actionMap.find((item) => item.status === currentJob?.status),
     [currentJob?.status]
   );
+  const currentNavigationTarget = useMemo(() => {
+    if (!currentJob?.order) {
+      return null;
+    }
+
+    if (currentJob.status === 'IN_TRANSIT') {
+      return {
+        lat: currentJob.order.dropLat,
+        lng: currentJob.order.dropLng,
+        label: 'Navigate to Drop'
+      };
+    }
+
+    return {
+      lat: currentJob.order.pickupLat,
+      lng: currentJob.order.pickupLng,
+      label: 'Navigate to Pickup'
+    };
+  }, [currentJob]);
 
   const runAction = async () => {
     if (!currentJob || !activeAction) {
@@ -48,6 +68,18 @@ export function JobsScreen() {
     } catch {
       Alert.alert('Action failed', 'Could not update trip state.');
     }
+  };
+
+  const navigateToTarget = async (target?: { lat?: number; lng?: number }, fallbackMessage?: string) => {
+    if (typeof target?.lat !== 'number' || typeof target?.lng !== 'number') {
+      Alert.alert('Location unavailable', fallbackMessage ?? 'Could not find trip coordinates.');
+      return;
+    }
+
+    await openGoogleMapsNavigation({
+      lat: target.lat,
+      lng: target.lng
+    });
   };
 
   return (
@@ -82,6 +114,17 @@ export function JobsScreen() {
                   <Text style={[styles.offerButtonText, { color: colors.accent }]}>Reject</Text>
                 </Pressable>
               </View>
+              <Pressable
+                style={styles.offerNavButton}
+                onPress={() =>
+                  void navigateToTarget(
+                    { lat: offer.order?.pickupLat, lng: offer.order?.pickupLng },
+                    'Offer pickup location is not available yet.'
+                  )
+                }
+              >
+                <Text style={styles.offerNavButtonText}>Open Pickup in Google Maps</Text>
+              </Pressable>
             </View>
           ))}
         </View>
@@ -94,6 +137,18 @@ export function JobsScreen() {
               <Text style={styles.info}>Status: {currentJob.status}</Text>
               <Text style={styles.info}>Pickup: {currentJob.order?.pickupAddress}</Text>
               <Text style={styles.info}>Drop: {currentJob.order?.dropAddress}</Text>
+
+              <Pressable
+                style={styles.navButton}
+                onPress={() =>
+                  void navigateToTarget(
+                    { lat: currentNavigationTarget?.lat, lng: currentNavigationTarget?.lng },
+                    'Current trip location coordinates are not available yet.'
+                  )
+                }
+              >
+                <Text style={styles.navButtonText}>{currentNavigationTarget?.label ?? 'Open in Google Maps'}</Text>
+              </Pressable>
 
               {activeAction ? (
                 <Pressable style={styles.mainActionButton} onPress={() => void runAction()}>
@@ -113,6 +168,17 @@ export function JobsScreen() {
               <Text style={styles.info}>Order: {nextJob.id}</Text>
               <Text style={styles.info}>Pickup: {nextJob.pickupAddress}</Text>
               <Text style={styles.info}>Drop: {nextJob.dropAddress}</Text>
+              <Pressable
+                style={styles.navButton}
+                onPress={() =>
+                  void navigateToTarget(
+                    { lat: nextJob.pickupLat, lng: nextJob.pickupLng },
+                    'Queued job pickup coordinates are not available yet.'
+                  )
+                }
+              >
+                <Text style={styles.navButtonText}>Navigate to Queued Pickup</Text>
+              </Pressable>
             </>
           ) : (
             <Text style={styles.info}>No queued job accepted yet.</Text>
@@ -168,6 +234,33 @@ const styles = StyleSheet.create({
     borderColor: '#FDBA74'
   },
   offerButtonText: { color: colors.white, fontFamily: typography.bodyBold },
+  offerNavButton: {
+    marginTop: 4,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.secondary,
+    alignItems: 'center',
+    paddingVertical: spacing.xs,
+    backgroundColor: '#ECFDF5'
+  },
+  offerNavButtonText: {
+    color: colors.secondary,
+    fontFamily: typography.bodyBold,
+    fontSize: 12
+  },
+  navButton: {
+    marginTop: spacing.xs,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.secondary,
+    alignItems: 'center',
+    paddingVertical: spacing.xs,
+    backgroundColor: '#ECFDF5'
+  },
+  navButtonText: {
+    color: colors.secondary,
+    fontFamily: typography.bodyBold
+  },
   mainActionButton: {
     marginTop: spacing.sm,
     backgroundColor: colors.primary,

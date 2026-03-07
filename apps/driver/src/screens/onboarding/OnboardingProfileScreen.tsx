@@ -3,16 +3,16 @@ import {
   ActivityIndicator,
   Alert,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
-  TextInput,
   View
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, radius, spacing, typography } from '../../theme';
 import type { OnboardingStackParamList } from '../../types';
 import { useOnboardingStore } from '../../store/useOnboardingStore';
+import { AnimatedTextField } from '../../components/AnimatedTextField';
+import { FormScreen } from '../../components/FormScreen';
 
 type Props = NativeStackScreenProps<OnboardingStackParamList, 'OnboardingProfile'>;
 
@@ -20,64 +20,121 @@ export function OnboardingProfileScreen({ navigation }: Props) {
   const loading = useOnboardingStore((state) => state.loading);
   const load = useOnboardingStore((state) => state.load);
   const updateProfile = useOnboardingStore((state) => state.updateProfile);
-  const store = useOnboardingStore((state) => ({
-    fullName: state.fullName,
-    phone: state.phone,
-    email: state.email,
-    city: state.city
-  }));
+  const storeFullName = useOnboardingStore((state) => state.fullName);
+  const storePhone = useOnboardingStore((state) => state.phone);
+  const storeEmail = useOnboardingStore((state) => state.email);
+  const storeCity = useOnboardingStore((state) => state.city);
+  const error = useOnboardingStore((state) => state.error);
 
-  const [fullName, setFullName] = useState(store.fullName);
-  const [phone, setPhone] = useState(store.phone);
-  const [email, setEmail] = useState(store.email);
-  const [city, setCity] = useState(store.city);
+  const [fullName, setFullName] = useState(storeFullName);
+  const [phone, setPhone] = useState(storePhone);
+  const [email, setEmail] = useState(storeEmail);
+  const [city, setCity] = useState(storeCity);
+  const [hasLocalEdits, setHasLocalEdits] = useState(false);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    setFullName(store.fullName);
-    setPhone(store.phone);
-    setEmail(store.email);
-    setCity(store.city);
-  }, [store.city, store.email, store.fullName, store.phone]);
+    if (hasLocalEdits) {
+      return;
+    }
+
+    setFullName(storeFullName);
+    setPhone(storePhone);
+    setEmail(storeEmail);
+    setCity(storeCity);
+  }, [hasLocalEdits, storeCity, storeEmail, storeFullName, storePhone]);
 
   const save = async () => {
+    if (!fullName.trim() || !phone.trim()) {
+      Alert.alert('Required details missing', 'Enter full name and phone to continue.');
+      return;
+    }
+
     try {
-      await updateProfile({ fullName, phone, email, city });
+      await updateProfile({
+        fullName: fullName.trim(),
+        phone: phone.trim(),
+        email: email.trim(),
+        city: city.trim()
+      });
+      setHasLocalEdits(false);
       navigation.navigate('OnboardingVehicle');
     } catch {
-      Alert.alert('Could not save', 'Please check details and retry.');
+      const latestError = useOnboardingStore.getState().error;
+      Alert.alert('Could not save', latestError ?? 'Please check details and retry.');
     }
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <FormScreen>
       <View style={styles.container}>
         <Text style={styles.title}>Onboarding: Profile</Text>
         <View style={styles.card}>
-          <Text style={styles.label}>Full name</Text>
-          <TextInput style={styles.input} value={fullName} onChangeText={setFullName} />
-          <Text style={styles.label}>Phone</Text>
-          <TextInput style={styles.input} value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
-          <Text style={styles.label}>Email</Text>
-          <TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" />
-          <Text style={styles.label}>City</Text>
-          <TextInput style={styles.input} value={city} onChangeText={setCity} />
+          <AnimatedTextField
+            label="Full name"
+            value={fullName}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setFullName(value);
+            }}
+            placeholder="Ravi Kumar"
+            returnKeyType="next"
+          />
+          <AnimatedTextField
+            label="Phone"
+            value={phone}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setPhone(value);
+            }}
+            keyboardType="phone-pad"
+            placeholder="+91 90000 00000"
+            autoCapitalize="none"
+            returnKeyType="next"
+          />
+          <AnimatedTextField
+            label="Email"
+            value={email}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setEmail(value);
+            }}
+            autoCapitalize="none"
+            keyboardType="email-address"
+            placeholder="name@example.com"
+            returnKeyType="next"
+          />
+          <AnimatedTextField
+            label="City"
+            value={city}
+            onChangeText={(value) => {
+              setHasLocalEdits(true);
+              setCity(value);
+            }}
+            placeholder="Bengaluru"
+            returnKeyType="done"
+          />
+
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
           <Pressable style={styles.button} onPress={() => void save()} disabled={loading}>
-            {loading ? <ActivityIndicator color={colors.white} /> : <Text style={styles.buttonText}>Save & Continue</Text>}
+            {loading ? (
+              <ActivityIndicator color={colors.white} />
+            ) : (
+              <Text style={styles.buttonText}>Save & Continue</Text>
+            )}
           </Pressable>
         </View>
       </View>
-    </SafeAreaView>
+    </FormScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.paper },
-  container: { flex: 1, padding: spacing.lg, justifyContent: 'center', gap: spacing.md },
+  container: { gap: spacing.md },
   title: { fontFamily: typography.heading, fontSize: 28, color: colors.accent },
   card: {
     backgroundColor: colors.white,
@@ -87,15 +144,10 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     gap: spacing.xs
   },
-  label: { fontFamily: typography.bodyBold, color: colors.accent },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    backgroundColor: '#FFF7ED',
-    fontFamily: typography.body
+  errorText: {
+    fontFamily: typography.body,
+    color: colors.danger,
+    fontSize: 12
   },
   button: {
     marginTop: spacing.sm,

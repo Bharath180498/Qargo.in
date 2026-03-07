@@ -23,9 +23,18 @@ export class KycController {
     return this.kycService.verifyIdfy(payload);
   }
 
+  @Post('verify/cashfree')
+  verifyCashfree(@Body() payload: VerifyIdfyDto) {
+    return this.kycService.verifyIdfy(payload);
+  }
+
+  @Post('verify/provider')
+  verifyProvider(@Body() payload: VerifyIdfyDto) {
+    return this.kycService.verifyIdfy(payload);
+  }
+
   @Get('status/me')
   status(@Query('userId') userId: string) {
     return this.kycService.status(userId);
   }
 }
-

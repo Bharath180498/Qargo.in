@@ -4,13 +4,13 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "dev:mobile": "expo start --lan",
-    "start": "expo start --lan",
-    "start:fresh": "sh -c 'kill $(lsof -ti:8081) 2>/dev/null || true; expo start --lan --clear --port 8081'",
-    "start:clear": "expo start --lan --clear",
-    "start:tunnel": "expo start --tunnel",
-    "ios": "expo run:ios",
-    "android": "expo run:android",
+    "dev:mobile": "../../scripts/start-expo-manual-tunnel.sh . 8081 false",
+    "start": "../../scripts/start-expo-manual-tunnel.sh . 8081 false",
+    "start:fresh": "../../scripts/start-expo-manual-tunnel.sh . 8081 true",
+    "start:clear": "../../scripts/start-expo-manual-tunnel.sh . 8081 true",
+    "start:tunnel": "../../scripts/start-expo-manual-tunnel.sh . 8081 false",
+    "ios": "npx expo run:ios",
+    "android": "npx expo run:android",
     "build": "echo 'Use EAS build for iOS/Android release artifacts'",
     "lint": "echo 'lint not configured for mobile yet'",
     "test": "echo 'test not configured for mobile yet'"
@@ -35,6 +35,7 @@
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
     "react-native-web": "^0.21.0",
+    "metro-runtime": "^0.83.1",
     "socket.io-client": "^4.8.1",
     "zustand": "^5.0.2"
   },

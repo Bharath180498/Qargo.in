@@ -26,6 +26,10 @@ class EnvSchema {
 
   @IsOptional()
   @IsString()
+  OTP_PROVIDER?: string;
+
+  @IsOptional()
+  @IsString()
   ROUTE_PROVIDER?: string;
 
   @IsOptional()
@@ -46,6 +50,30 @@ class EnvSchema {
 
   @IsOptional()
   @IsString()
+  IDFY_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  IDFY_ACCOUNT_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  CASHFREE_CLIENT_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  CASHFREE_CLIENT_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  CASHFREE_KYC_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  CASHFREE_API_VERSION?: string;
+
+  @IsOptional()
+  @IsString()
   FCM_SERVER_KEY?: string;
 
   @IsOptional()
@@ -56,6 +84,58 @@ class EnvSchema {
   @IsInt()
   @Min(60)
   OTP_TTL_SECONDS?: number;
+
+  @IsOptional()
+  @IsString()
+  TWILIO_ACCOUNT_SID?: string;
+
+  @IsOptional()
+  @IsString()
+  TWILIO_AUTH_TOKEN?: string;
+
+  @IsOptional()
+  @IsString()
+  TWILIO_MESSAGING_SERVICE_SID?: string;
+
+  @IsOptional()
+  @IsString()
+  TWILIO_FROM_NUMBER?: string;
+
+  @IsOptional()
+  @IsString()
+  RAZORPAY_KEY_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  RAZORPAY_KEY_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  RAZORPAY_WEBHOOK_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  UPI_PAYEE_VPA?: string;
+
+  @IsOptional()
+  @IsString()
+  UPI_PAYEE_NAME?: string;
+
+  @IsOptional()
+  @IsString()
+  EWAY_BILL_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  EWAY_BILL_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  INSURANCE_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  INSURANCE_API_KEY?: string;
 
   @IsOptional()
   @IsString()

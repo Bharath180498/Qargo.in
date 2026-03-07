@@ -1,10 +1,21 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InsurancePlan } from '@prisma/client';
 import { QuoteInsuranceDto } from './dto/quote-insurance.dto';
 
 @Injectable()
 export class InsuranceService {
-  quote(payload: QuoteInsuranceDto) {
+  constructor(private readonly configService: ConfigService) {}
+
+  private get apiUrl() {
+    return this.configService.get<string>('insuranceApiUrl') ?? '';
+  }
+
+  private get apiKey() {
+    return this.configService.get<string>('insuranceApiKey') ?? '';
+  }
+
+  private quoteMock(payload: QuoteInsuranceDto) {
     const goodsValue = payload.goodsValue;
 
     const options = [
@@ -32,7 +43,44 @@ export class InsuranceService {
       goodsType: payload.goodsType,
       goodsValue,
       currency: 'INR',
+      provider: 'mock',
       options
     };
+  }
+
+  async quote(payload: QuoteInsuranceDto) {
+    if (!this.apiUrl || this.apiUrl === 'replace-me') {
+      return this.quoteMock(payload);
+    }
+
+    try {
+      const response = await fetch(this.apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {})
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        return this.quoteMock(payload);
+      }
+
+      const external = (await response.json().catch(() => null)) as
+        | Record<string, unknown>
+        | null;
+
+      if (!external || typeof external !== 'object') {
+        return this.quoteMock(payload);
+      }
+
+      return {
+        provider: 'external',
+        ...external
+      };
+    } catch {
+      return this.quoteMock(payload);
+    }
   }
 }

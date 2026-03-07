@@ -9,6 +9,17 @@ import type {
 } from '../types';
 import { useSessionStore } from './useSessionStore';
 
+const ONGOING_ORDER_STATUSES = ['CREATED', 'MATCHING', 'ASSIGNED', 'AT_PICKUP', 'LOADING', 'IN_TRANSIT'] as const;
+const TERMINAL_ORDER_STATUSES = ['DELIVERED', 'CANCELLED'] as const;
+
+export function isOngoingOrderStatus(status?: string) {
+  return Boolean(status && ONGOING_ORDER_STATUSES.includes(status as (typeof ONGOING_ORDER_STATUSES)[number]));
+}
+
+function isTerminalOrderStatus(status?: string) {
+  return Boolean(status && TERMINAL_ORDER_STATUSES.includes(status as (typeof TERMINAL_ORDER_STATUSES)[number]));
+}
+
 export interface RoutePoint {
   address: string;
   lat: number;
@@ -19,6 +30,7 @@ export type PaymentMethod = 'VISA_5496' | 'MASTERCARD_6802' | 'UPI_SCAN_PAY' | '
 
 interface CustomerState {
   activeOrderId?: string;
+  activeOrderStatus?: string;
   estimatedPrice?: number;
   dispatchMode?: string;
   selectedVehicle?: VehicleQuote;
@@ -63,6 +75,7 @@ interface CustomerState {
   fetchInsuranceQuotes: () => Promise<void>;
   selectVehicle: (vehicleType: BookingInput['vehicleType']) => void;
   createBooking: (input: BookingInput) => Promise<void>;
+  syncActiveOrder: () => Promise<any>;
   refreshOrder: () => Promise<any>;
   refreshTimeline: () => Promise<any>;
   refreshLocationHistory: () => Promise<any>;
@@ -93,6 +106,7 @@ function errorMessage(error: unknown, fallback: string) {
 
 export const useCustomerStore = create<CustomerState>((set, get) => ({
   quotes: [],
+  activeOrderStatus: undefined,
   draftPickup: undefined,
   draftDrop: undefined,
   goodsDescription: DEFAULTS.goodsDescription,
@@ -301,6 +315,7 @@ export const useCustomerStore = create<CustomerState>((set, get) => ({
       set({
         creating: false,
         activeOrderId: orderId,
+        activeOrderStatus: String(response.data.order_status ?? 'MATCHING'),
         estimatedPrice: response.data.estimated_price,
         dispatchMode: response.data.dispatch_mode,
         generatedEwayBillNumber: ewayBillNumber,
@@ -322,12 +337,53 @@ export const useCustomerStore = create<CustomerState>((set, get) => ({
 
     const response = await api.get(`/orders/${orderId}`);
     const eway = response.data?.ewayBillNumber as string | undefined;
+    const status = response.data?.status as string | undefined;
 
     if (eway) {
       set({ generatedEwayBillNumber: eway });
     }
 
+    set({
+      activeOrderStatus: status,
+      ...(status && isTerminalOrderStatus(status)
+        ? {
+            activeOrderId: undefined
+          }
+        : {})
+    });
+
     return response.data;
+  },
+  async syncActiveOrder() {
+    const user = useSessionStore.getState().user;
+    if (!user?.id) {
+      return null;
+    }
+
+    const response = await api.get('/orders', {
+      params: {
+        customerId: user.id
+      }
+    });
+
+    const orders = Array.isArray(response.data) ? response.data : [];
+    const ongoing = orders.find((entry) => isOngoingOrderStatus(String(entry?.status ?? '')));
+
+    if (!ongoing) {
+      set({
+        activeOrderId: undefined,
+        activeOrderStatus: undefined
+      });
+      return null;
+    }
+
+    set({
+      activeOrderId: String(ongoing.id),
+      activeOrderStatus: String(ongoing.status),
+      estimatedPrice: Number(ongoing.finalPrice ?? ongoing.estimatedPrice ?? get().estimatedPrice ?? 0)
+    });
+
+    return ongoing;
   },
   async refreshTimeline() {
     const orderId = get().activeOrderId;

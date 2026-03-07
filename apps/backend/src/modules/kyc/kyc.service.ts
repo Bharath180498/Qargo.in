@@ -14,6 +14,7 @@ import { VerifyIdfyDto } from './dto/verify-idfy.dto';
 import { IdfyProvider } from './providers/idfy.provider';
 import { KycVerificationProvider } from './providers/kyc-verification.provider';
 import { MockIdfyProvider } from './providers/mock-idfy.provider';
+import { CashfreeProvider } from './providers/cashfree.provider';
 
 @Injectable()
 export class KycService {
@@ -22,12 +23,19 @@ export class KycService {
     private readonly configService: ConfigService,
     private readonly onboardingService: DriverOnboardingService,
     private readonly idfyProvider: IdfyProvider,
+    private readonly cashfreeProvider: CashfreeProvider,
     private readonly mockProvider: MockIdfyProvider
   ) {}
 
   private get provider(): KycVerificationProvider {
     const mode = this.configService.get<string>('kycProvider') ?? 'mock';
-    return mode === 'idfy' ? this.idfyProvider : this.mockProvider;
+    if (mode === 'idfy') {
+      return this.idfyProvider;
+    }
+    if (mode === 'cashfree') {
+      return this.cashfreeProvider;
+    }
+    return this.mockProvider;
   }
 
   async generateUploadUrl(payload: GenerateUploadUrlDto) {

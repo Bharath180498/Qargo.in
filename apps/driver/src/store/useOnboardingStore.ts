@@ -56,6 +56,43 @@ function currentUserId() {
   return userId;
 }
 
+function extractErrorMessage(error: unknown, fallback: string) {
+  if (typeof error !== 'object' || error === null) {
+    return fallback;
+  }
+
+  if ('response' in error) {
+    const response = (error as { response?: { data?: unknown } }).response;
+    const data = response?.data;
+
+    if (typeof data === 'string' && data.trim()) {
+      return data;
+    }
+
+    if (typeof data === 'object' && data !== null) {
+      if ('message' in data) {
+        const message = (data as { message?: unknown }).message;
+        if (Array.isArray(message)) {
+          return message.join(', ');
+        }
+        if (typeof message === 'string' && message.trim()) {
+          return message;
+        }
+      }
+
+      if ('error' in data && typeof (data as { error?: unknown }).error === 'string') {
+        return (data as { error: string }).error;
+      }
+    }
+  }
+
+  if ('message' in error && typeof (error as { message?: unknown }).message === 'string') {
+    return (error as { message: string }).message;
+  }
+
+  return fallback;
+}
+
 export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   ...defaultState,
   loading: false,
@@ -106,76 +143,130 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     const userId = currentUserId();
     const next = { ...get(), ...payload };
 
-    await api.post('/driver-onboarding/profile', {
-      userId,
-      fullName: next.fullName,
-      phone: next.phone,
-      email: next.email,
-      city: next.city
-    });
+    set({ loading: true, error: undefined });
 
-    set(payload);
+    try {
+      await api.post('/driver-onboarding/profile', {
+        userId,
+        fullName: next.fullName,
+        phone: next.phone,
+        email: next.email,
+        city: next.city
+      });
+
+      set({ ...payload, loading: false, error: undefined });
+    } catch (error: unknown) {
+      set({
+        loading: false,
+        error: extractErrorMessage(error, 'Unable to save profile details')
+      });
+      throw error;
+    }
   },
   async updateVehicle(payload) {
     const userId = currentUserId();
     const next = { ...get(), ...payload };
 
-    await api.post('/driver-onboarding/vehicle', {
-      userId,
-      vehicleType: next.vehicleType,
-      vehicleNumber: next.vehicleNumber,
-      licenseNumber: next.licenseNumber,
-      aadhaarNumber: next.aadhaarNumber,
-      rcNumber: next.rcNumber
-    });
+    set({ loading: true, error: undefined });
 
-    set(payload);
+    try {
+      await api.post('/driver-onboarding/vehicle', {
+        userId,
+        vehicleType: next.vehicleType,
+        vehicleNumber: next.vehicleNumber,
+        licenseNumber: next.licenseNumber,
+        aadhaarNumber: next.aadhaarNumber,
+        rcNumber: next.rcNumber
+      });
+
+      set({ ...payload, loading: false, error: undefined });
+    } catch (error: unknown) {
+      set({
+        loading: false,
+        error: extractErrorMessage(error, 'Unable to save vehicle details')
+      });
+      throw error;
+    }
   },
   async updateBank(payload) {
     const userId = currentUserId();
     const next = { ...get(), ...payload };
 
-    await api.post('/driver-onboarding/bank', {
-      userId,
-      accountHolderName: next.accountHolderName,
-      bankName: next.bankName,
-      accountNumber: next.accountNumber,
-      ifscCode: next.ifscCode,
-      upiId: next.upiId
-    });
+    set({ loading: true, error: undefined });
 
-    set(payload);
+    try {
+      await api.post('/driver-onboarding/bank', {
+        userId,
+        accountHolderName: next.accountHolderName,
+        bankName: next.bankName,
+        accountNumber: next.accountNumber,
+        ifscCode: next.ifscCode,
+        upiId: next.upiId
+      });
+
+      set({ ...payload, loading: false, error: undefined });
+    } catch (error: unknown) {
+      set({
+        loading: false,
+        error: extractErrorMessage(error, 'Unable to save payout details')
+      });
+      throw error;
+    }
   },
   async uploadDoc(type) {
     const userId = currentUserId();
+    set({ loading: true, error: undefined });
 
-    const upload = await api.post('/kyc/upload-url', {
-      userId,
-      type,
-      fileName: `${type.toLowerCase()}.jpg`,
-      contentType: 'image/jpeg'
-    });
+    try {
+      const upload = await api.post('/kyc/upload-url', {
+        userId,
+        type,
+        fileName: `${type.toLowerCase()}.jpg`,
+        contentType: 'image/jpeg'
+      });
 
-    await api.post('/kyc/documents', {
-      userId,
-      type,
-      fileKey: upload.data.fileKey,
-      fileUrl: upload.data.fileUrl,
-      mimeType: 'image/jpeg',
-      fileSizeBytes: 123456
-    });
+      await api.post('/kyc/documents', {
+        userId,
+        type,
+        fileKey: upload.data.fileKey,
+        fileUrl: upload.data.fileUrl,
+        mimeType: 'image/jpeg',
+        fileSizeBytes: 123456
+      });
 
-    set((state) => ({
-      uploadedDocs: state.uploadedDocs.includes(type) ? state.uploadedDocs : [...state.uploadedDocs, type]
-    }));
+      set((state) => ({
+        uploadedDocs: state.uploadedDocs.includes(type)
+          ? state.uploadedDocs
+          : [...state.uploadedDocs, type],
+        loading: false
+      }));
+
+      await get().load();
+    } catch (error: unknown) {
+      set({
+        loading: false,
+        error: extractErrorMessage(error, 'Document upload failed')
+      });
+      throw error;
+    }
   },
   async submit() {
     const userId = currentUserId();
+    set({ loading: true, error: undefined });
 
-    await api.post('/driver-onboarding/submit', { userId });
-    await api.post('/kyc/verify/idfy', { userId });
+    try {
+      await api.post('/driver-onboarding/submit', { userId });
+      await api.post('/kyc/verify/idfy', { userId });
 
-    await useDriverSessionStore.getState().refreshOnboardingStatus();
-    await get().load();
+      await useDriverSessionStore.getState().refreshOnboardingStatus();
+      await get().load();
+      set({ loading: false });
+    } catch (error: unknown) {
+      set({
+        loading: false,
+        error: extractErrorMessage(error, 'Unable to submit onboarding')
+      });
+      throw error;
+    }
   }
 }));

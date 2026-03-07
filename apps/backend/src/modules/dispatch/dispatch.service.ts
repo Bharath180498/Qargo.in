@@ -34,6 +34,7 @@ interface DispatchCandidate {
   vehicleMatchType: VehicleMatchType;
   distanceKm: number;
   routeEtaMinutes: number;
+  routeProvider: 'google' | 'mock';
   score: CandidateScore;
 }
 
@@ -51,6 +52,10 @@ export class DispatchService {
 
   private get dispatchRadiusKm() {
     return this.configService.get<number>('dispatchRadiusKm') ?? 8;
+  }
+
+  private get offerExpirySeconds() {
+    return 45;
   }
 
   private get redis() {
@@ -141,6 +146,7 @@ export class DispatchService {
           vehicleMatchType: matchType,
           distanceKm: Number((driver.distanceKm ?? eta.distanceKm).toFixed(2)),
           routeEtaMinutes: eta.etaMinutes,
+          routeProvider: eta.provider,
           score
         } satisfies DispatchCandidate;
       })
@@ -192,7 +198,7 @@ export class DispatchService {
     mode: 'NEW_ASSIGNMENT' | 'REASSIGNMENT' | 'QUEUE_OFFER';
     linkedTripId?: string;
   }) {
-    const expiresAt = new Date(Date.now() + 20 * 1000);
+    const expiresAt = new Date(Date.now() + this.offerExpirySeconds * 1000);
     const offer = await this.prisma.tripOffer.create({
       data: {
         orderId: input.order.id,
@@ -216,13 +222,14 @@ export class DispatchService {
       routeEtaMinutes: input.candidate.routeEtaMinutes,
       vehicleMatchType: input.candidate.vehicleMatchType,
       totalScore: input.candidate.score.total,
-      decisionPayload: {
-        score: input.candidate.score,
-        distanceKm: input.candidate.distanceKm,
-        driverName: input.candidate.driverName
-      },
-      reason: 'Offer created'
-    });
+        decisionPayload: {
+          score: input.candidate.score,
+          distanceKm: input.candidate.distanceKm,
+          driverName: input.candidate.driverName,
+          routeProvider: input.candidate.routeProvider
+        },
+        reason: 'Offer created'
+      });
 
     await this.notificationsService.notifyDriver(input.candidate.driverId, 'trip_offer_new', {
       offerId: offer.id,
@@ -251,11 +258,18 @@ export class DispatchService {
 
   private async createNextOffer(order: Order, excludedDriverIds: string[]) {
     const candidates = await this.buildCandidates(order);
-    const candidate = candidates.find(
+    let candidate = candidates.find(
       (item) =>
         item.availabilityStatus === AvailabilityStatus.ONLINE &&
         !excludedDriverIds.includes(item.driverId)
     );
+
+    let retriedExcludedDriver = false;
+    if (!candidate && excludedDriverIds.length > 0) {
+      // If every online driver has already seen this order, retry the top online candidate.
+      candidate = candidates.find((item) => item.availabilityStatus === AvailabilityStatus.ONLINE);
+      retriedExcludedDriver = Boolean(candidate);
+    }
 
     if (!candidate) {
       await this.logDecision({
@@ -269,7 +283,7 @@ export class DispatchService {
     return this.createOffer({
       order,
       candidate,
-      mode: excludedDriverIds.length > 0 ? 'REASSIGNMENT' : 'NEW_ASSIGNMENT'
+      mode: retriedExcludedDriver || excludedDriverIds.length > 0 ? 'REASSIGNMENT' : 'NEW_ASSIGNMENT'
     });
   }
 
@@ -289,6 +303,28 @@ export class DispatchService {
         tripId: existingTrip.id,
         driverId: existingTrip.driverId,
         mode: 'EXISTING'
+      };
+    }
+
+    const activeOffer = await this.prisma.tripOffer.findFirst({
+      where: {
+        orderId: order.id,
+        status: TripOfferStatus.PENDING,
+        expiresAt: {
+          gt: new Date()
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    if (activeOffer) {
+      return {
+        orderId: order.id,
+        assigned: false,
+        mode: 'OFFER_PENDING',
+        offerId: activeOffer.id,
+        routeEtaMinutes: activeOffer.routeEtaMinutes,
+        vehicleMatchType: activeOffer.vehicleMatchType
       };
     }
 
@@ -710,7 +746,7 @@ export class DispatchService {
         tripId: currentTrip.id,
         driverId,
         status: TripOfferStatus.PENDING,
-        expiresAt: new Date(Date.now() + 30 * 1000),
+        expiresAt: new Date(Date.now() + this.offerExpirySeconds * 1000),
         score: Number((1 / (next.distanceKm + 1)).toFixed(4)),
         routeEtaMinutes: Math.max(2, Math.round((next.distanceKm / 25) * 60)),
         distanceKm: Number(next.distanceKm.toFixed(2)),

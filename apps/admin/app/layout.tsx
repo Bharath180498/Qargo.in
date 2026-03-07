@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'PorterX Admin Dashboard',
+  title: 'Qargo Admin Dashboard',
   description: 'Marketplace operations dashboard for logistics dispatch and fleet management.'
 };
 

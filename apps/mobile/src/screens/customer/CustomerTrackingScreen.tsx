@@ -41,6 +41,7 @@ export function CustomerTrackingScreen({ navigation }: Props) {
   const [order, setOrder] = useState<any>();
   const [timeline, setTimeline] = useState<any[]>([]);
   const [points, setPoints] = useState<DriverPoint[]>([]);
+  const [dispatchDecisions, setDispatchDecisions] = useState<any[]>([]);
   const [rating, setRating] = useState(5);
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
 
@@ -52,8 +53,16 @@ export function CustomerTrackingScreen({ navigation }: Props) {
         refreshLocationHistory()
       ]);
 
+      const decisionsPayload = activeOrderId
+        ? await api
+            .get(`/dispatch/orders/${activeOrderId}/decisions`)
+            .then((response) => response.data)
+            .catch(() => [])
+        : [];
+
       setOrder(orderPayload);
       setTimeline(timelinePayload?.timeline ?? []);
+      setDispatchDecisions(Array.isArray(decisionsPayload) ? decisionsPayload : []);
       setPoints(
         (historyPayload?.points ?? [])
           .map((item: any) => ({
@@ -70,7 +79,7 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     const interval = setInterval(() => void load(), 5000);
 
     return () => clearInterval(interval);
-  }, [refreshLocationHistory, refreshOrder, refreshTimeline]);
+  }, [activeOrderId, refreshLocationHistory, refreshOrder, refreshTimeline]);
 
   useEffect(() => {
     if (!activeOrderId) {
@@ -143,6 +152,22 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     [liveDriver?.lat, liveDriver?.lng, pickup.latitude, pickup.longitude]
   );
 
+  const hasAssignedDriver = Boolean(assignedDriver);
+  const matchingProgress = useMemo(() => {
+    if (hasAssignedDriver) {
+      return 1;
+    }
+
+    const attempts = dispatchDecisions.length;
+    return Math.min(0.92, 0.18 + attempts * 0.18);
+  }, [dispatchDecisions.length, hasAssignedDriver]);
+  const matchingHeadline = hasAssignedDriver ? 'Driver assigned' : 'Finding your driver';
+  const matchingSubtitle = hasAssignedDriver
+    ? 'Pickup ETA and driver details are ready.'
+    : dispatchDecisions.length > 1
+      ? `Checked ${dispatchDecisions.length} nearby driver option(s).`
+      : 'Checking nearby available drivers now.';
+
   const submitRating = async () => {
     const tripId = order?.trip?.id;
     if (!tripId) {
@@ -185,6 +210,20 @@ export function CustomerTrackingScreen({ navigation }: Props) {
   };
 
   const ewayDisplay = order?.ewayBillNumber ?? generatedEwayBillNumber;
+
+  if (!activeOrderId) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyTitle}>No active trip right now</Text>
+          <Text style={styles.emptySubtitle}>Book a new goods delivery from Home.</Text>
+          <Pressable style={styles.emptyButton} onPress={() => navigation.navigate('CustomerHome')}>
+            <Text style={styles.emptyButtonText}>Go to Home</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -229,6 +268,14 @@ export function CustomerTrackingScreen({ navigation }: Props) {
             </View>
           </View>
 
+          <View style={styles.matchingCard}>
+            <Text style={styles.matchingTitle}>{matchingHeadline}</Text>
+            <Text style={styles.matchingSubtitle}>{matchingSubtitle}</Text>
+            <View style={styles.matchingTrack}>
+              <View style={[styles.matchingFill, { width: `${Math.round(matchingProgress * 100)}%` }]} />
+            </View>
+          </View>
+
           <View style={styles.infoGrid}>
             <View style={styles.infoCard}>
               <Text style={styles.infoLabel}>Trip status</Text>
@@ -247,6 +294,13 @@ export function CustomerTrackingScreen({ navigation }: Props) {
               <Text style={styles.infoValue}>{order?.payment?.status ?? 'PENDING'}</Text>
             </View>
           </View>
+
+          <Pressable style={styles.paymentAction} onPress={() => navigation.navigate('CustomerPayment')}>
+            <Text style={styles.paymentActionTitle}>Payment</Text>
+            <Text style={styles.paymentActionSubtitle}>
+              {order?.payment?.status ?? 'Pending payment'} - tap to pay or change method
+            </Text>
+          </Pressable>
 
           {assignedDriver ? (
             <View style={styles.driverCard}>
@@ -357,6 +411,37 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFF8F1'
   },
+  emptyWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    gap: 10
+  },
+  emptyTitle: {
+    color: '#0F172A',
+    fontFamily: 'Sora_700Bold',
+    fontSize: 22,
+    textAlign: 'center'
+  },
+  emptySubtitle: {
+    color: '#64748B',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 14,
+    textAlign: 'center'
+  },
+  emptyButton: {
+    marginTop: 4,
+    borderRadius: 12,
+    backgroundColor: '#0F766E',
+    paddingHorizontal: 16,
+    paddingVertical: 10
+  },
+  emptyButtonText: {
+    color: '#ECFEFF',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 14
+  },
   mapWrap: {
     flex: 1,
     position: 'relative'
@@ -414,6 +499,55 @@ const styles = StyleSheet.create({
     color: '#0F766E',
     fontFamily: 'Manrope_700Bold',
     fontSize: 11
+  },
+  matchingCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 6
+  },
+  matchingTitle: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 15
+  },
+  matchingSubtitle: {
+    color: '#64748B',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12
+  },
+  matchingTrack: {
+    width: '100%',
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#E2E8F0',
+    overflow: 'hidden'
+  },
+  matchingFill: {
+    height: '100%',
+    backgroundColor: '#0F766E'
+  },
+  paymentAction: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#99F6E4',
+    backgroundColor: '#ECFEFF',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    gap: 2
+  },
+  paymentActionTitle: {
+    color: '#115E59',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 14
+  },
+  paymentActionSubtitle: {
+    color: '#0F766E',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12
   },
   infoGrid: {
     flexDirection: 'row',

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { AuthSessionStatus, UserRole } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
@@ -10,6 +10,8 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
@@ -19,6 +21,10 @@ export class AuthService {
 
   private get authMode() {
     return this.configService.get<string>('authMode') ?? 'mock';
+  }
+
+  private get otpProvider() {
+    return this.configService.get<string>('otpProvider') ?? 'mock';
   }
 
   private get otpTtlSeconds() {
@@ -62,6 +68,99 @@ export class AuthService {
     return String(value);
   }
 
+  private async sendOtpViaTwilio(phone: string, code: string) {
+    const accountSid = this.configService.get<string>('twilio.accountSid') ?? '';
+    const authToken = this.configService.get<string>('twilio.authToken') ?? '';
+    const messagingServiceSid = this.configService.get<string>('twilio.messagingServiceSid') ?? '';
+    const fromNumber = this.configService.get<string>('twilio.fromNumber') ?? '';
+
+    if (!accountSid || !authToken || (!messagingServiceSid && !fromNumber)) {
+      return {
+        sent: false,
+        mode: 'mock' as const,
+        reason: 'Twilio credentials are not configured'
+      };
+    }
+
+    const payload = new URLSearchParams();
+    payload.set('To', phone);
+    payload.set('Body', `Qargo OTP: ${code}. Valid for ${Math.ceil(this.otpTtlSeconds / 60)} min.`);
+
+    if (messagingServiceSid) {
+      payload.set('MessagingServiceSid', messagingServiceSid);
+    } else {
+      payload.set('From', fromNumber);
+    }
+
+    const response = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: payload.toString()
+      }
+    );
+
+    const data = (await response.json()) as {
+      sid?: string;
+      message?: string;
+      code?: number;
+    };
+
+    if (!response.ok) {
+      return {
+        sent: false,
+        mode: 'twilio' as const,
+        reason: data?.message ?? `Twilio error ${response.status}`
+      };
+    }
+
+    return {
+      sent: true,
+      mode: 'twilio' as const,
+      providerRef: data?.sid
+    };
+  }
+
+  private async dispatchOtp(phone: string, code: string) {
+    if (this.authMode === 'mock' || this.otpProvider === 'mock') {
+      return {
+        sent: false,
+        mode: 'mock' as const,
+        reason: 'Mock OTP mode enabled'
+      };
+    }
+
+    if (this.otpProvider === 'twilio') {
+      try {
+        return await this.sendOtpViaTwilio(phone, code);
+      } catch (error) {
+        const message =
+          typeof error === 'object' &&
+          error !== null &&
+          'message' in error &&
+          typeof (error as { message?: unknown }).message === 'string'
+            ? (error as { message: string }).message
+            : 'Unknown Twilio error';
+
+        return {
+          sent: false,
+          mode: 'twilio' as const,
+          reason: message
+        };
+      }
+    }
+
+    return {
+      sent: false,
+      mode: 'mock' as const,
+      reason: `Unsupported OTP provider: ${this.otpProvider}`
+    };
+  }
+
   async mockLogin(payload: MockLoginDto) {
     const user = await this.usersService.findOrCreateByPhone(payload);
     const session = await this.issueSession({ id: user.id, role: user.role });
@@ -98,11 +197,19 @@ export class AuthService {
       }
     });
 
+    const delivery = await this.dispatchOtp(payload.phone, code);
+
+    if (!delivery.sent && delivery.mode !== 'mock') {
+      this.logger.warn(`OTP delivery failed for ${payload.phone}: ${delivery.reason ?? 'unknown reason'}`);
+    }
+
     return {
       otpSessionId: otpSession.id,
       expiresAt,
+      provider: delivery.mode,
+      deliveryStatus: delivery.sent ? 'SENT' : 'FALLBACK',
       // Returned intentionally in fallback mode so app testing works without SMS provider.
-      code: this.authMode === 'mock' ? code : undefined
+      code: this.authMode === 'mock' || !delivery.sent ? code : undefined
     };
   }
 

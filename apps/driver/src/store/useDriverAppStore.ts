@@ -137,11 +137,16 @@ export const useDriverAppStore = create<DriverAppState>((set, get) => ({
       return;
     }
 
-    const response = await api.get(`/drivers/${driverProfileId}/jobs`);
+    const [jobsResponse, offersResponse] = await Promise.all([
+      api.get(`/drivers/${driverProfileId}/jobs`),
+      api.get(`/dispatch/drivers/${driverProfileId}/offers`)
+    ]);
+
+    const response = jobsResponse;
     set({
       currentJob: response.data.currentJob,
       nextJob: response.data.nextJob,
-      pendingOffers: response.data.pendingOffers ?? [],
+      pendingOffers: offersResponse.data ?? response.data.pendingOffers ?? [],
       availabilityStatus: response.data.currentJob ? 'BUSY' : get().availabilityStatus
     });
   },

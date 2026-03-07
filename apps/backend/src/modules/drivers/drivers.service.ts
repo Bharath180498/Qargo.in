@@ -253,18 +253,6 @@ export class DriversService implements OnModuleInit {
   }
 
   async getDriverJobs(driverId: string) {
-    await this.prisma.tripOffer.updateMany({
-      where: {
-        driverId,
-        status: TripOfferStatus.PENDING,
-        expiresAt: { lte: new Date() }
-      },
-      data: {
-        status: TripOfferStatus.EXPIRED,
-        respondedAt: new Date()
-      }
-    });
-
     const currentTrip = await this.prisma.trip.findFirst({
       where: {
         driverId,

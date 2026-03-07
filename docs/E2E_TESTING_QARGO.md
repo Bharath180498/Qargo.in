@@ -100,11 +100,12 @@ Current live-provider readiness:
 - OTP provider: Twilio SMS supported when `OTP_PROVIDER=twilio` + Twilio credentials are configured.
 - IDfy provider: live verification call supported when `KYC_PROVIDER=idfy` + IDfy credentials are configured.
 - Cashfree provider: live verification call supported when `KYC_PROVIDER=cashfree` + Cashfree credentials are configured.
+- QuickeKYC provider: live verification call supported when `KYC_PROVIDER=quickekyc` + QuickeKYC credentials are configured.
 - Razorpay: live order creation + webhook verification supported with Razorpay keys.
 - UPI: intent deep-link flow supported with `UPI_PAYEE_VPA`.
 - E-way bill and insurance: external API passthrough supported when API URL/key are configured; otherwise mock fallback.
 
-### Cashfree KYC Railway command
+### QuickeKYC Railway command
 
 ```bash
 npm run railway:configure-vars -- \
@@ -112,11 +113,11 @@ npm run railway:configure-vars -- \
   --postgres-service Postgres \
   --redis-service Redis \
   --skip-admin \
-  --kyc-provider cashfree \
-  --cashfree-client-id 'YOUR_CASHFREE_CLIENT_ID' \
-  --cashfree-client-secret 'YOUR_CASHFREE_CLIENT_SECRET' \
-  --cashfree-kyc-api-url 'YOUR_CASHFREE_KYC_API_URL' \
-  --cashfree-api-version '2023-08-01'
+  --kyc-provider quickekyc \
+  --quickekyc-api-url 'https://api.quickekyc.com/api/v1' \
+  --quickekyc-api-key 'YOUR_QUICKEKYC_API_KEY' \
+  --quickekyc-api-key-header 'x-api-key' \
+  --quickekyc-use-authorization-header 'false'
 railway up --service backend --detach
 ```
 

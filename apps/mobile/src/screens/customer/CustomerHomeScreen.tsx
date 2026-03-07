@@ -1,9 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types/navigation';
 import { type RoutePoint, isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
+import { CustomerSideDrawer, type DrawerRoute } from '../../components/CustomerSideDrawer';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerHome'>;
 
@@ -36,12 +37,9 @@ export function CustomerHomeScreen({ navigation }: Props) {
   const setDraftRoute = useCustomerStore((state) => state.setDraftRoute);
   const activeOrderId = useCustomerStore((state) => state.activeOrderId);
   const activeOrderStatus = useCustomerStore((state) => state.activeOrderStatus);
-  const syncActiveOrder = useCustomerStore((state) => state.syncActiveOrder);
   const refreshOrder = useCustomerStore((state) => state.refreshOrder);
-
-  useEffect(() => {
-    void syncActiveOrder();
-  }, [syncActiveOrder]);
+  const dismissActiveOrder = useCustomerStore((state) => state.dismissActiveOrder);
+  const [drawerVisible, setDrawerVisible] = useState(false);
 
   useEffect(() => {
     if (activeOrderId) {
@@ -49,17 +47,58 @@ export function CustomerHomeScreen({ navigation }: Props) {
     }
   }, [activeOrderId, refreshOrder]);
 
-  const hasOngoingOrder = Boolean(activeOrderId && isOngoingOrderStatus(activeOrderStatus));
+  useEffect(() => {
+    if (activeOrderId && activeOrderStatus === 'CANCELLED') {
+      dismissActiveOrder();
+    }
+  }, [activeOrderId, activeOrderStatus, dismissActiveOrder]);
 
-  const startBookingFlow = (drop?: RoutePoint) => {
-    if (hasOngoingOrder) {
+  const hasOngoingOrder = Boolean(activeOrderId && isOngoingOrderStatus(activeOrderStatus));
+  const hasSummaryPending = Boolean(activeOrderId && activeOrderStatus === 'DELIVERED');
+  const hasOpenOrder = hasOngoingOrder || hasSummaryPending;
+  const bookingLockLabel = hasOngoingOrder
+    ? 'Trip in progress'
+    : hasSummaryPending
+      ? 'Completed trip summary pending'
+      : 'Pick-up and drop';
+  const bookingLockTitle = hasOngoingOrder
+    ? 'Booking paused while trip is active'
+    : hasSummaryPending
+      ? 'Booking locked until summary is closed'
+      : 'Where should we deliver?';
+
+  const navigateFromDrawer = (route: DrawerRoute) => {
+    navigation.navigate(route);
+  };
+
+  const startBookingFlow = async (drop?: RoutePoint) => {
+    if (activeOrderId) {
+      try {
+        await refreshOrder();
+      } catch {
+        // Keep local state if refresh fails.
+      }
+    }
+
+    const latest = useCustomerStore.getState();
+    if (latest.activeOrderId && latest.activeOrderStatus === 'CANCELLED') {
+      latest.dismissActiveOrder();
+    }
+    const latestStatus = latest.activeOrderStatus;
+    const latestHasOngoing = Boolean(latest.activeOrderId && isOngoingOrderStatus(latestStatus));
+    const latestHasSummaryPending = Boolean(latest.activeOrderId && latestStatus === 'DELIVERED');
+    const shouldBlockBooking = latestHasOngoing || latestHasSummaryPending;
+
+    if (shouldBlockBooking) {
       Alert.alert(
-        'Trip in progress',
-        'You already have an active goods trip. Please complete it before booking another.',
+        latestHasOngoing ? 'Trip in progress' : 'Trip summary pending',
+        latestHasOngoing
+          ? 'You already have an active goods trip. Please complete it before booking another.'
+          : 'Please close the latest completed trip summary before creating a new booking.',
         [
           { text: 'Later', style: 'cancel' },
           {
-            text: 'Resume Trip',
+            text: latestHasOngoing ? 'Resume Trip' : 'View Summary',
             onPress: () => navigation.navigate('CustomerTracking')
           }
         ]
@@ -80,25 +119,27 @@ export function CustomerHomeScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          <View style={styles.headlineSection}>
-            <Text style={styles.headlineEyebrow}>QARGO KARNATAKA</Text>
-            <Text style={styles.headlineTitle}>Move goods fast across the city, without the calling chase.</Text>
-            <Text style={styles.headlineSubtitle}>
-              Live trucks, transparent pricing, and GST-ready workflows built for Indian businesses.
-            </Text>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          showsHorizontalScrollIndicator={false}
+          alwaysBounceHorizontal={false}
+          bounces={false}
+          directionalLockEnabled
+        >
+          <View style={styles.topBar}>
+            <Pressable style={styles.menuButton} onPress={() => setDrawerVisible(true)}>
+              <Text style={styles.menuButtonText}>≡</Text>
+            </Pressable>
+            <Text style={styles.topBarTitle}>Home</Text>
+            <View style={styles.topBarSpacer} />
+          </View>
 
-            <View style={styles.quickPills}>
-              <View style={styles.quickPill}>
-                <Text style={styles.quickPillText}>Live tracking</Text>
-              </View>
-              <View style={styles.quickPill}>
-                <Text style={styles.quickPillText}>Instant dispatch</Text>
-              </View>
-              <View style={styles.quickPill}>
-                <Text style={styles.quickPillText}>GST-ready</Text>
-              </View>
-            </View>
+          <View style={styles.headlineSection}>
+            <Text style={styles.headlineEyebrow}>QARGO</Text>
+            <Text style={styles.headlineTitle}>Move goods, on demand.</Text>
+            <Text style={styles.headlineSubtitle}>Book quickly, track live, deliver reliably.</Text>
           </View>
 
           {hasOngoingOrder ? (
@@ -117,14 +158,25 @@ export function CustomerHomeScreen({ navigation }: Props) {
                 </Pressable>
               </View>
             </View>
+          ) : hasOpenOrder ? (
+            <View style={styles.ongoingCard}>
+              <View style={styles.ongoingHeader}>
+                <Text style={styles.ongoingTitle}>Trip completed</Text>
+                <Text style={styles.ongoingStatus}>{activeOrderStatus ?? 'DELIVERED'}</Text>
+              </View>
+              <Text style={styles.ongoingSubtitle}>Review trip summary and tip driver before your next booking.</Text>
+              <View style={styles.ongoingActions}>
+                <Pressable style={styles.ongoingPrimaryButton} onPress={() => navigation.navigate('CustomerTracking')}>
+                  <Text style={styles.ongoingPrimaryText}>View summary</Text>
+                </Pressable>
+              </View>
+            </View>
           ) : null}
 
-          <Pressable style={styles.searchCard} onPress={() => startBookingFlow()}>
+          <Pressable style={styles.searchCard} onPress={() => void startBookingFlow()}>
             <View>
-              <Text style={styles.searchLabel}>{hasOngoingOrder ? 'Active trip in progress' : 'Pick-up and drop'}</Text>
-              <Text style={styles.searchTitle}>
-                {hasOngoingOrder ? 'Complete current trip to book again' : 'Where should we deliver?'}
-              </Text>
+              <Text style={styles.searchLabel}>{bookingLockLabel}</Text>
+              <Text style={styles.searchTitle}>{bookingLockTitle}</Text>
             </View>
             <View style={styles.searchArrowWrap}>
               <Text style={styles.searchArrow}>{'>'}</Text>
@@ -138,7 +190,7 @@ export function CustomerHomeScreen({ navigation }: Props) {
 
           <View style={styles.servicesGrid}>
             {SERVICES.map((service) => (
-              <Pressable key={service.key} style={styles.serviceCard} onPress={() => startBookingFlow()}>
+              <Pressable key={service.key} style={styles.serviceCard} onPress={() => void startBookingFlow()}>
                 <View style={[styles.serviceIcon, { backgroundColor: service.accent }]}>
                   <Text style={styles.serviceIconText}>{service.title.slice(0, 2).toUpperCase()}</Text>
                 </View>
@@ -155,7 +207,7 @@ export function CustomerHomeScreen({ navigation }: Props) {
 
           <View style={styles.recentList}>
             {RECENT_DROPS.map((place) => (
-              <Pressable key={place.address} style={styles.recentCard} onPress={() => startBookingFlow(place)}>
+              <Pressable key={place.address} style={styles.recentCard} onPress={() => void startBookingFlow(place)}>
                 <View style={styles.recentDot} />
                 <View style={styles.recentCopy}>
                   <Text style={styles.recentMain}>{place.address.split(',')[0]}</Text>
@@ -177,6 +229,15 @@ export function CustomerHomeScreen({ navigation }: Props) {
           </LinearGradient>
         </ScrollView>
       </View>
+
+      <CustomerSideDrawer
+        visible={drawerVisible}
+        activeRoute="CustomerHome"
+        onClose={() => setDrawerVisible(false)}
+        onNavigate={navigateFromDrawer}
+        showTracking={hasOpenOrder}
+        onNavigateTracking={() => navigation.navigate('CustomerTracking')}
+      />
     </SafeAreaView>
   );
 }
@@ -184,58 +245,77 @@ export function CustomerHomeScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#FFF8F1'
+    backgroundColor: '#FFF8F1',
+    overflow: 'hidden'
   },
   container: {
     flex: 1,
-    backgroundColor: '#FFF8F1'
+    backgroundColor: '#FFF8F1',
+    alignItems: 'center',
+    overflow: 'hidden'
+  },
+  scrollView: {
+    width: '100%'
   },
   scroll: {
+    width: '100%',
+    maxWidth: 440,
     paddingHorizontal: 16,
     paddingVertical: 10,
     gap: 14
   },
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  menuButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  menuButtonText: {
+    fontFamily: 'Manrope_700Bold',
+    color: '#0F172A',
+    fontSize: 18,
+    lineHeight: 22
+  },
+  topBarTitle: {
+    fontFamily: 'Sora_700Bold',
+    color: '#1E293B',
+    fontSize: 16
+  },
+  topBarSpacer: {
+    width: 40,
+    height: 40
+  },
   headlineSection: {
-    gap: 8,
+    gap: 4,
     paddingTop: 2,
-    paddingBottom: 4
+    paddingBottom: 2
   },
   headlineEyebrow: {
     fontFamily: 'Manrope_700Bold',
     color: '#0F766E',
     fontSize: 11,
-    letterSpacing: 1.3
+    letterSpacing: 1.1
   },
   headlineTitle: {
     fontFamily: 'Sora_700Bold',
-    color: '#7C2D12',
-    fontSize: 26,
-    lineHeight: 32
+    color: '#1E293B',
+    fontSize: 22,
+    lineHeight: 28
   },
   headlineSubtitle: {
     fontFamily: 'Manrope_500Medium',
-    color: '#475569',
-    fontSize: 14,
-    lineHeight: 20
-  },
-  quickPills: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 2
-  },
-  quickPill: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#D1FAE5',
-    backgroundColor: '#F0FDFA',
-    paddingHorizontal: 10,
-    paddingVertical: 5
-  },
-  quickPillText: {
-    fontFamily: 'Manrope_700Bold',
-    color: '#0F766E',
-    fontSize: 11
+    color: '#64748B',
+    fontSize: 13,
+    lineHeight: 18
   },
   searchCard: {
     borderRadius: 16,
@@ -349,10 +429,11 @@ const styles = StyleSheet.create({
   servicesGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10
+    justifyContent: 'space-between',
+    rowGap: 10
   },
   serviceCard: {
-    width: '48%',
+    width: '49%',
     borderRadius: 14,
     borderWidth: 1,
     borderColor: '#E2E8F0',

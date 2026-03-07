@@ -16,9 +16,11 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import api from '../../services/api';
 import type { RootStackParamList } from '../../types/navigation';
 import { type RoutePoint, useCustomerStore } from '../../store/useCustomerStore';
 import MapView, { type MapViewRef, Marker, type Region } from '../../components/maps';
+import appConfig from '../../../app.json';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerPickupConfirm'>;
 
@@ -26,9 +28,13 @@ type SelectionStep = 'PICKUP' | 'DROP';
 
 interface AddressSuggestion {
   id: string;
+  placeId: string;
+  primaryText: string;
+  secondaryText: string;
   address: string;
-  lat: number;
-  lng: number;
+  provider?: 'google' | 'nominatim';
+  lat?: number;
+  lng?: number;
 }
 
 const FALLBACK_REGION: Region = {
@@ -39,97 +45,336 @@ const FALLBACK_REGION: Region = {
 };
 
 const SEARCH_DEBOUNCE_MS = 280;
-
-const LOCAL_ADDRESS_CATALOG: AddressSuggestion[] = [
-  { id: 'blr-koramangala', address: 'Koramangala, Bengaluru', lat: 12.9352, lng: 77.6245 },
-  { id: 'blr-indiranagar', address: 'Indiranagar, Bengaluru', lat: 12.9784, lng: 77.6408 },
-  { id: 'blr-whitefield', address: 'Whitefield, Bengaluru', lat: 12.9698, lng: 77.7499 },
-  { id: 'blr-hsr', address: 'HSR Layout, Bengaluru', lat: 12.9116, lng: 77.6474 },
-  { id: 'blr-ecity', address: 'Electronic City Phase 1, Bengaluru', lat: 12.8399, lng: 77.677 },
-  { id: 'blr-marathahalli', address: 'Marathahalli, Bengaluru', lat: 12.9591, lng: 77.6974 },
-  { id: 'blr-yeshwanthpur', address: 'Yeshwanthpur, Bengaluru', lat: 13.0285, lng: 77.542 },
-  { id: 'blr-malleswaram', address: 'Malleswaram, Bengaluru', lat: 13.0035, lng: 77.5683 },
-  { id: 'blr-btm', address: 'BTM Layout, Bengaluru', lat: 12.9166, lng: 77.6101 },
-  { id: 'blr-jayanagar', address: 'Jayanagar, Bengaluru', lat: 12.925, lng: 77.5938 },
-  { id: 'blr-kengeri', address: 'Kengeri, Bengaluru', lat: 12.9081, lng: 77.4824 },
-  { id: 'blr-hebbal', address: 'Hebbal, Bengaluru', lat: 13.0358, lng: 77.597 },
-  { id: 'blr-airport', address: 'Kempegowda International Airport, Bengaluru', lat: 13.1986, lng: 77.7066 }
-];
+const MOBILE_GOOGLE_MAPS_API_KEY =
+  typeof (
+    appConfig as {
+      expo?: { extra?: { googleMapsApiKey?: unknown } };
+    }
+  ).expo?.extra?.googleMapsApiKey === 'string'
+    ? String(
+        (
+          appConfig as {
+            expo?: { extra?: { googleMapsApiKey?: unknown } };
+          }
+        ).expo?.extra?.googleMapsApiKey
+      ).trim()
+    : '';
 
 function formatCoordinateAddress(lat: number, lng: number) {
   return `Lat ${lat.toFixed(5)}, Lng ${lng.toFixed(5)}`;
 }
 
-function searchLocalSuggestions(query: string): AddressSuggestion[] {
-  const normalized = query.trim().toLowerCase();
-  if (normalized.length < 2) {
-    return [];
-  }
-
-  return LOCAL_ADDRESS_CATALOG.filter((entry) => entry.address.toLowerCase().includes(normalized)).slice(0, 6);
+function createPlacesSessionToken() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-async function fetchAddressSuggestions(query: string): Promise<AddressSuggestion[]> {
-  const normalized = query.trim();
-  if (normalized.length < 2) {
-    return [];
+async function fetchGoogleAutocompleteLegacy(input: {
+  query: string;
+  lat: number;
+  lng: number;
+  sessionToken: string;
+}) {
+  if (!MOBILE_GOOGLE_MAPS_API_KEY) {
+    return [] as AddressSuggestion[];
   }
 
   const params = new URLSearchParams({
-    format: 'jsonv2',
-    q: normalized,
-    countrycodes: 'in',
-    limit: '6',
-    addressdetails: '1'
+    input: input.query,
+    key: MOBILE_GOOGLE_MAPS_API_KEY,
+    language: 'en',
+    components: 'country:in',
+    location: `${input.lat},${input.lng}`,
+    radius: '20000',
+    sessiontoken: input.sessionToken
   });
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 4500);
-
-  try {
-    const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json'
-      },
-      signal: controller.signal
-    });
-
-    if (!response.ok) {
-      throw new Error('Search failed');
+  const response = await fetch(`https://maps.googleapis.com/maps/api/place/autocomplete/json?${params.toString()}`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json'
     }
+  });
 
-    const json = (await response.json()) as Array<{
-      place_id?: number;
-      display_name?: string;
-      lat?: string;
-      lon?: string;
-    }>;
-
-    const parsed = json
-      .map((item) => {
-        const lat = Number(item.lat);
-        const lng = Number(item.lon);
-
-        if (!item.display_name || Number.isNaN(lat) || Number.isNaN(lng)) {
-          return null;
-        }
-
-        return {
-          id: String(item.place_id ?? `${lat}-${lng}`),
-          address: item.display_name,
-          lat,
-          lng
-        } satisfies AddressSuggestion;
-      })
-      .filter((item): item is AddressSuggestion => item !== null);
-
-    return parsed.length > 0 ? parsed : searchLocalSuggestions(normalized);
-  } catch {
-    return searchLocalSuggestions(normalized);
-  } finally {
-    clearTimeout(timeoutId);
+  if (!response.ok) {
+    return [] as AddressSuggestion[];
   }
+
+  const payload = (await response.json()) as {
+    predictions?: Array<{
+      description?: string;
+      place_id?: string;
+      structured_formatting?: {
+        main_text?: string;
+        secondary_text?: string;
+      };
+    }>;
+  };
+
+  const suggestions = (payload.predictions ?? [])
+    .map((entry, index) => {
+      const placeId = entry.place_id?.trim();
+      const address = entry.description?.trim();
+      if (!placeId || !address) {
+        return null;
+      }
+
+      return {
+        id: `${placeId}-${index}`,
+        placeId,
+        primaryText: entry.structured_formatting?.main_text?.trim() || address.split(',')[0] || address,
+        secondaryText: entry.structured_formatting?.secondary_text?.trim() || address,
+        address,
+        provider: 'google'
+      } satisfies AddressSuggestion;
+    })
+    .filter(Boolean) as AddressSuggestion[];
+
+  return suggestions.slice(0, 8);
+}
+
+async function fetchGoogleAutocompleteNew(input: {
+  query: string;
+  lat: number;
+  lng: number;
+  sessionToken: string;
+}) {
+  if (!MOBILE_GOOGLE_MAPS_API_KEY) {
+    return [] as AddressSuggestion[];
+  }
+
+  const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': MOBILE_GOOGLE_MAPS_API_KEY,
+      'X-Goog-FieldMask':
+        'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text,suggestions.placePrediction.structuredFormat.mainText.text,suggestions.placePrediction.structuredFormat.secondaryText.text'
+    },
+    body: JSON.stringify({
+      input: input.query,
+      languageCode: 'en',
+      regionCode: 'IN',
+      sessionToken: input.sessionToken,
+      locationBias: {
+        circle: {
+          center: {
+            latitude: input.lat,
+            longitude: input.lng
+          },
+          radius: 20000
+        }
+      }
+    })
+  });
+
+  if (!response.ok) {
+    return [] as AddressSuggestion[];
+  }
+
+  const payload = (await response.json()) as {
+    suggestions?: Array<{
+      placePrediction?: {
+        placeId?: string;
+        text?: { text?: string };
+        structuredFormat?: {
+          mainText?: { text?: string };
+          secondaryText?: { text?: string };
+        };
+      };
+    }>;
+  };
+
+  const suggestions = (payload.suggestions ?? [])
+    .map((entry, index) => {
+      const place = entry.placePrediction;
+      const placeId = place?.placeId?.trim();
+      const address = place?.text?.text?.trim();
+      if (!placeId || !address) {
+        return null;
+      }
+
+      return {
+        id: `${placeId}-${index}`,
+        placeId,
+        primaryText: place?.structuredFormat?.mainText?.text?.trim() || address.split(',')[0] || address,
+        secondaryText: place?.structuredFormat?.secondaryText?.text?.trim() || address,
+        address,
+        provider: 'google'
+      } satisfies AddressSuggestion;
+    })
+    .filter(Boolean) as AddressSuggestion[];
+
+  return suggestions.slice(0, 8);
+}
+
+async function fetchGoogleAutocompleteDirect(input: {
+  query: string;
+  lat: number;
+  lng: number;
+  sessionToken: string;
+}) {
+  const legacy = await fetchGoogleAutocompleteLegacy(input);
+  if (legacy.length > 0) {
+    return legacy;
+  }
+
+  return fetchGoogleAutocompleteNew(input);
+}
+
+async function fetchNominatimAutocomplete(input: { query: string }) {
+  const params = new URLSearchParams({
+    q: input.query,
+    format: 'jsonv2',
+    addressdetails: '1',
+    limit: '8',
+    countrycodes: 'in'
+  });
+
+  const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'Qargo/1.0'
+    }
+  });
+
+  if (!response.ok) {
+    return [] as AddressSuggestion[];
+  }
+
+  const payload = (await response.json()) as Array<{
+    place_id?: number;
+    lat?: string;
+    lon?: string;
+    display_name?: string;
+    name?: string;
+  }>;
+
+  const suggestions = payload
+    .map((entry, index) => {
+      const lat = Number(entry.lat);
+      const lng = Number(entry.lon);
+      const address = entry.display_name?.trim();
+      if (!address || Number.isNaN(lat) || Number.isNaN(lng)) {
+        return null;
+      }
+
+      const primary = entry.name?.trim() || address.split(',')[0] || address;
+      const secondary = address.includes(',') ? address.split(',').slice(1).join(',').trim() : address;
+      const placeId = `nominatim-${entry.place_id ?? index}`;
+
+      return {
+        id: placeId,
+        placeId,
+        primaryText: primary,
+        secondaryText: secondary,
+        address,
+        provider: 'nominatim',
+        lat,
+        lng
+      } satisfies AddressSuggestion;
+    })
+    .filter(Boolean) as AddressSuggestion[];
+
+  return suggestions.slice(0, 8);
+}
+
+async function fetchGooglePlaceDetailsLegacy(placeId: string) {
+  if (!MOBILE_GOOGLE_MAPS_API_KEY) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    place_id: placeId,
+    key: MOBILE_GOOGLE_MAPS_API_KEY,
+    fields: 'place_id,formatted_address,geometry/location',
+    language: 'en'
+  });
+
+  const response = await fetch(`https://maps.googleapis.com/maps/api/place/details/json?${params.toString()}`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json'
+    }
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = (await response.json()) as {
+    result?: {
+      formatted_address?: string;
+      geometry?: {
+        location?: {
+          lat?: number;
+          lng?: number;
+        };
+      };
+    };
+  };
+
+  const lat = payload.result?.geometry?.location?.lat;
+  const lng = payload.result?.geometry?.location?.lng;
+
+  if (typeof lat !== 'number' || typeof lng !== 'number') {
+    return null;
+  }
+
+  return {
+    lat,
+    lng,
+    address: payload.result?.formatted_address
+  };
+}
+
+async function fetchGooglePlaceDetailsNew(placeId: string) {
+  if (!MOBILE_GOOGLE_MAPS_API_KEY) {
+    return null;
+  }
+
+  const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?languageCode=en`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      'X-Goog-Api-Key': MOBILE_GOOGLE_MAPS_API_KEY,
+      'X-Goog-FieldMask': 'id,formattedAddress,location'
+    }
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = (await response.json()) as {
+    formattedAddress?: string;
+    location?: {
+      latitude?: number;
+      longitude?: number;
+    };
+  };
+
+  const lat = payload.location?.latitude;
+  const lng = payload.location?.longitude;
+  if (typeof lat !== 'number' || typeof lng !== 'number') {
+    return null;
+  }
+
+  return {
+    lat,
+    lng,
+    address: payload.formattedAddress
+  };
+}
+
+async function fetchGooglePlaceDetailsDirect(placeId: string) {
+  const legacy = await fetchGooglePlaceDetailsLegacy(placeId);
+  if (legacy) {
+    return legacy;
+  }
+
+  return fetchGooglePlaceDetailsNew(placeId);
 }
 
 async function reverseGeocodeAddress(lat: number, lng: number, fallbackLabel: string) {
@@ -182,12 +427,18 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchMessage, setSearchMessage] = useState<string | undefined>();
+  const [searchSessionToken, setSearchSessionToken] = useState(() => createPlacesSessionToken());
   const [initializing, setInitializing] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [keyboardRaised, setKeyboardRaised] = useState(false);
 
   const activeQuery = step === 'PICKUP' ? pickupQuery : dropQuery;
   const activeSearchSelected = step === 'PICKUP' ? pickupSearchSelected : dropSearchSelected;
+  const showManualPinFallback =
+    !activeSearchSelected &&
+    suggestions.length === 0 &&
+    activeQuery.trim().length >= 2 &&
+    Boolean(searchMessage);
   const hudOpacity = keyboardLift.interpolate({
     inputRange: [0, 120],
     outputRange: [1, 0.2],
@@ -291,7 +542,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
     const query = activeQuery.trim();
 
     if (activeSearchSelected || query.length < 2) {
-      setSuggestions(query.length >= 2 && !activeSearchSelected ? searchLocalSuggestions(query) : []);
+      setSuggestions([]);
       setSearchLoading(false);
       setSearchMessage(undefined);
       return;
@@ -302,25 +553,98 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
     setSearchMessage(undefined);
 
     const timeoutId = setTimeout(() => {
-      void fetchAddressSuggestions(query)
-        .then((results) => {
+      void api
+        .get('/maps/places/autocomplete', {
+          params: {
+            input: query,
+            lat: mapRegion.latitude,
+            lng: mapRegion.longitude,
+            sessionToken: searchSessionToken,
+            countryCode: 'IN'
+          }
+        })
+        .then(async (response) => {
           if (cancelled) {
             return;
+          }
+
+          const payload = response.data as {
+            suggestions?: AddressSuggestion[];
+            keyConfigured?: boolean;
+            message?: string;
+          };
+          let results = Array.isArray(payload.suggestions) ? payload.suggestions : [];
+
+          if (results.length === 0 && MOBILE_GOOGLE_MAPS_API_KEY) {
+            const direct = await fetchGoogleAutocompleteDirect({
+              query,
+              lat: mapRegion.latitude,
+              lng: mapRegion.longitude,
+              sessionToken: searchSessionToken
+            });
+            if (!cancelled && direct.length > 0) {
+              results = direct;
+            }
+          }
+
+          if (results.length === 0) {
+            const openFallback = await fetchNominatimAutocomplete({ query });
+            if (!cancelled && openFallback.length > 0) {
+              results = openFallback;
+            }
           }
 
           setSuggestions(results);
 
           if (results.length === 0) {
-            setSearchMessage('No nearby matches. Try landmark + area name.');
+            if (payload.keyConfigured === false) {
+              setSearchMessage('Google Places key missing on backend.');
+            } else if (payload.message) {
+              setSearchMessage(payload.message);
+            } else {
+              setSearchMessage('No Google Maps matches for this query yet.');
+            }
           }
         })
-        .catch(() => {
+        .catch(async () => {
           if (cancelled) {
             return;
           }
 
-          setSuggestions(searchLocalSuggestions(query));
-          setSearchMessage('Online search is unavailable. Showing local suggestions.');
+          const fallbackResults = await fetchGoogleAutocompleteDirect({
+            query,
+            lat: mapRegion.latitude,
+            lng: mapRegion.longitude,
+            sessionToken: searchSessionToken
+          });
+
+          if (cancelled) {
+            return;
+          }
+
+          if (fallbackResults.length > 0) {
+            setSuggestions(fallbackResults);
+            setSearchMessage(undefined);
+            return;
+          }
+
+          const openFallback = await fetchNominatimAutocomplete({ query });
+          if (cancelled) {
+            return;
+          }
+
+          if (openFallback.length > 0) {
+            setSuggestions(openFallback);
+            setSearchMessage(undefined);
+            return;
+          }
+
+          setSuggestions([]);
+          setSearchMessage(
+            MOBILE_GOOGLE_MAPS_API_KEY
+              ? 'Google Maps suggestions unavailable right now.'
+              : 'Google Maps suggestion service unavailable. Redeploy backend or set mobile key.'
+          );
         })
         .finally(() => {
           if (!cancelled) {
@@ -333,7 +657,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
       cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [activeQuery, activeSearchSelected]);
+  }, [activeQuery, activeSearchSelected, mapRegion.latitude, mapRegion.longitude, searchSessionToken]);
 
   const activeTitle = useMemo(
     () => (step === 'PICKUP' ? 'Search pick-up, then pin exact spot' : 'Search drop-off, then pin exact spot'),
@@ -367,36 +691,63 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
     setDropSearchSelected(false);
   };
 
-  const onSelectSuggestion = (suggestion: AddressSuggestion) => {
+  const onSelectSuggestion = async (suggestion: AddressSuggestion) => {
     Keyboard.dismiss();
-
-    const point: RoutePoint = {
-      address: suggestion.address,
-      lat: suggestion.lat,
-      lng: suggestion.lng
-    };
-
-    if (step === 'PICKUP') {
-      setPickupPoint(point);
-      setPickupQuery(point.address);
-      setPickupSearchSelected(true);
-    } else {
-      setDropPoint(point);
-      setDropQuery(point.address);
-      setDropSearchSelected(true);
-    }
-
-    const nextRegion: Region = {
-      latitude: point.lat,
-      longitude: point.lng,
-      latitudeDelta: mapRegion.latitudeDelta,
-      longitudeDelta: mapRegion.longitudeDelta
-    };
-
-    setMapRegion(nextRegion);
-    mapRef.current?.animateToRegion(nextRegion, 260);
-    setSuggestions([]);
+    setSearchLoading(true);
     setSearchMessage(undefined);
+
+    try {
+      let details: { lat?: number; lng?: number; address?: string } | null =
+        typeof suggestion.lat === 'number' && typeof suggestion.lng === 'number'
+          ? { lat: suggestion.lat, lng: suggestion.lng, address: suggestion.address }
+          : null;
+
+      if (!details) {
+        try {
+          const response = await api.get(`/maps/places/${encodeURIComponent(suggestion.placeId)}`);
+          details = response.data as { lat?: number; lng?: number; address?: string };
+        } catch {
+          details = await fetchGooglePlaceDetailsDirect(suggestion.placeId);
+        }
+      }
+
+      if (!details || typeof details.lat !== 'number' || typeof details.lng !== 'number') {
+        throw new Error('Missing place coordinates');
+      }
+
+      const point: RoutePoint = {
+        address: details.address ?? suggestion.address,
+        lat: details.lat,
+        lng: details.lng
+      };
+
+      if (step === 'PICKUP') {
+        setPickupPoint(point);
+        setPickupQuery(point.address);
+        setPickupSearchSelected(true);
+      } else {
+        setDropPoint(point);
+        setDropQuery(point.address);
+        setDropSearchSelected(true);
+      }
+
+      const nextRegion: Region = {
+        latitude: point.lat,
+        longitude: point.lng,
+        latitudeDelta: mapRegion.latitudeDelta,
+        longitudeDelta: mapRegion.longitudeDelta
+      };
+
+      setMapRegion(nextRegion);
+      mapRef.current?.animateToRegion(nextRegion, 260);
+      setSuggestions([]);
+      setSearchMessage(undefined);
+      setSearchSessionToken(createPlacesSessionToken());
+    } catch {
+      Alert.alert('Address unavailable', 'Could not load this Google Maps place. Try another suggestion.');
+    } finally {
+      setSearchLoading(false);
+    }
   };
 
   const onRegionChangeComplete = (region: Region) => {
@@ -422,6 +773,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
     setStep(nextStep);
     setSuggestions([]);
     setSearchMessage(undefined);
+    setSearchSessionToken(createPlacesSessionToken());
 
     const target = nextStep === 'PICKUP' ? pickupPoint : dropPoint;
     if (!target) {
@@ -530,6 +882,29 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
   };
 
   const onBlockedConfirm = () => {
+    if (showManualPinFallback) {
+      Alert.alert(
+        'Suggestions unavailable',
+        step === 'PICKUP'
+          ? 'Google suggestions are unavailable. Use the current map pin as pickup?'
+          : 'Google suggestions are unavailable. Use the current map pin as drop-off?',
+        [
+          { text: 'Go back', style: 'cancel' },
+          {
+            text: 'Use current pin',
+            onPress: () => {
+              if (step === 'PICKUP') {
+                setPickupSearchSelected(true);
+              } else {
+                setDropSearchSelected(true);
+              }
+            }
+          }
+        ]
+      );
+      return;
+    }
+
     Alert.alert(
       step === 'PICKUP' ? 'Pick-up search required' : 'Drop-off search required',
       step === 'PICKUP'
@@ -539,7 +914,11 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
   };
 
   const activeButtonText =
-    !activeSearchSelected
+    showManualPinFallback
+      ? step === 'PICKUP'
+        ? 'Use current pin as pickup'
+        : 'Use current pin as drop-off'
+      : !activeSearchSelected
       ? step === 'PICKUP'
         ? 'Select pick-up from suggestions'
         : 'Select drop-off from suggestions'
@@ -556,7 +935,6 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
           ref={mapRef}
           style={styles.map}
           initialRegion={mapRegion}
-          region={mapRegion}
           onRegionChangeComplete={onRegionChangeComplete}
         >
           {pickupPoint ? (
@@ -569,28 +947,30 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
           {dropPoint ? <Marker coordinate={{ latitude: dropPoint.lat, longitude: dropPoint.lng }} pinColor="#F97316" /> : null}
         </MapView>
 
-        <Animated.View style={[styles.topControls, { opacity: hudOpacity }]}>
+        <View style={styles.topControls}>
           <Pressable style={styles.circleButton} onPress={onBack}>
             <Text style={styles.circleButtonText}>{'<'}</Text>
           </Pressable>
 
-          <View style={styles.stepToggle}>
-            <Pressable
-              style={[styles.stepToggleItem, step === 'PICKUP' && styles.stepToggleItemActive]}
-              onPress={() => switchStep('PICKUP')}
-            >
-              <Text style={[styles.stepToggleText, step === 'PICKUP' && styles.stepToggleTextActive]}>Pickup</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.stepToggleItem, step === 'DROP' && styles.stepToggleItemActive]}
-              onPress={() => switchStep('DROP')}
-            >
-              <Text style={[styles.stepToggleText, step === 'DROP' && styles.stepToggleTextActive]}>Drop</Text>
-            </Pressable>
-          </View>
-        </Animated.View>
+          <Animated.View style={{ opacity: hudOpacity }}>
+            <View style={styles.stepToggle}>
+              <Pressable
+                style={[styles.stepToggleItem, step === 'PICKUP' && styles.stepToggleItemActive]}
+                onPress={() => switchStep('PICKUP')}
+              >
+                <Text style={[styles.stepToggleText, step === 'PICKUP' && styles.stepToggleTextActive]}>Pickup</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.stepToggleItem, step === 'DROP' && styles.stepToggleItemActive]}
+                onPress={() => switchStep('DROP')}
+              >
+                <Text style={[styles.stepToggleText, step === 'DROP' && styles.stepToggleTextActive]}>Drop</Text>
+              </Pressable>
+            </View>
+          </Animated.View>
+        </View>
 
-        <Animated.View style={[styles.centerPin, { opacity: hudOpacity }]}>
+        <Animated.View pointerEvents="none" style={[styles.centerPin, { opacity: hudOpacity }]}>
           <View style={[styles.centerPinDot, step === 'DROP' && styles.centerPinDotDrop]} />
         </Animated.View>
 
@@ -600,6 +980,12 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
           <View style={styles.sheetHandle} />
           <Text style={styles.sheetTitle}>{activeTitle}</Text>
           <Text style={styles.sheetSubtitle}>{activeSubtitle}</Text>
+          <View style={styles.sheetNavRow}>
+            <Pressable style={styles.sheetBackButton} onPress={onBack}>
+              <Text style={styles.sheetBackButtonText}>{step === 'DROP' ? 'Back to pickup' : 'Back'}</Text>
+            </Pressable>
+            <Text style={styles.sheetStepText}>{step === 'PICKUP' ? 'Step 1 of 2' : 'Step 2 of 2'}</Text>
+          </View>
 
           <View style={styles.searchBlock}>
             <Text style={styles.searchPrompt}>{step === 'PICKUP' ? 'Type pick-up location' : 'Type drop-off location'}</Text>
@@ -618,16 +1004,32 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
 
             {searchLoading ? <ActivityIndicator color="#0F766E" style={styles.searchLoading} /> : null}
             {searchMessage ? <Text style={styles.searchMessage}>{searchMessage}</Text> : null}
+            {showManualPinFallback ? (
+              <Pressable
+                style={styles.manualPinButton}
+                onPress={() => {
+                  if (step === 'PICKUP') {
+                    setPickupSearchSelected(true);
+                  } else {
+                    setDropSearchSelected(true);
+                  }
+                }}
+              >
+                <Text style={styles.manualPinButtonText}>
+                  Suggestions not loading? Continue with map pin
+                </Text>
+              </Pressable>
+            ) : null}
 
             {suggestions.length > 0 ? (
               <View style={[styles.suggestionsList, keyboardRaised && styles.suggestionsListRaised]}>
                 {suggestions.map((item) => (
                   <Pressable key={item.id} style={styles.suggestionItem} onPress={() => onSelectSuggestion(item)}>
                     <Text style={styles.suggestionTitle} numberOfLines={1}>
-                      {item.address.split(',')[0]}
+                      {item.primaryText}
                     </Text>
                     <Text style={styles.suggestionSub} numberOfLines={1}>
-                      {item.address}
+                      {item.secondaryText}
                     </Text>
                   </Pressable>
                 ))}
@@ -683,7 +1085,8 @@ const styles = StyleSheet.create({
     right: 18,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center'
+    alignItems: 'center',
+    zIndex: 20
   },
   circleButton: {
     width: 46,
@@ -693,7 +1096,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#E2E8F0'
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5
   },
   circleButtonText: {
     color: '#0F172A',
@@ -753,6 +1161,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#F97316'
   },
   sheet: {
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
     marginTop: 'auto',
     borderTopLeftRadius: 26,
     borderTopRightRadius: 26,
@@ -792,6 +1203,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: -3
   },
+  sheetNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
+  sheetBackButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 10,
+    paddingVertical: 6
+  },
+  sheetBackButtonText: {
+    color: '#334155',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  sheetStepText: {
+    color: '#64748B',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
   searchBlock: {
     gap: 6
   },
@@ -817,6 +1251,20 @@ const styles = StyleSheet.create({
   searchMessage: {
     color: '#64748B',
     fontFamily: 'Manrope_500Medium',
+    fontSize: 12
+  },
+  manualPinButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#0F766E',
+    backgroundColor: '#ECFEFF',
+    paddingHorizontal: 10,
+    paddingVertical: 6
+  },
+  manualPinButtonText: {
+    color: '#0F766E',
+    fontFamily: 'Manrope_700Bold',
     fontSize: 12
   },
   suggestionsList: {

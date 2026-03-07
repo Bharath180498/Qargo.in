@@ -10,14 +10,11 @@ import type {
 import { useSessionStore } from './useSessionStore';
 
 const ONGOING_ORDER_STATUSES = ['CREATED', 'MATCHING', 'ASSIGNED', 'AT_PICKUP', 'LOADING', 'IN_TRANSIT'] as const;
-const TERMINAL_ORDER_STATUSES = ['DELIVERED', 'CANCELLED'] as const;
-
 export function isOngoingOrderStatus(status?: string) {
   return Boolean(status && ONGOING_ORDER_STATUSES.includes(status as (typeof ONGOING_ORDER_STATUSES)[number]));
 }
-
-function isTerminalOrderStatus(status?: string) {
-  return Boolean(status && TERMINAL_ORDER_STATUSES.includes(status as (typeof TERMINAL_ORDER_STATUSES)[number]));
+export function isTerminalOrderStatus(status?: string) {
+  return status === 'CANCELLED' || status === 'DELIVERED';
 }
 
 export interface RoutePoint {
@@ -31,6 +28,7 @@ export type PaymentMethod = 'VISA_5496' | 'MASTERCARD_6802' | 'UPI_SCAN_PAY' | '
 interface CustomerState {
   activeOrderId?: string;
   activeOrderStatus?: string;
+  dismissedOrderId?: string;
   estimatedPrice?: number;
   dispatchMode?: string;
   selectedVehicle?: VehicleQuote;
@@ -79,6 +77,8 @@ interface CustomerState {
   refreshOrder: () => Promise<any>;
   refreshTimeline: () => Promise<any>;
   refreshLocationHistory: () => Promise<any>;
+  dismissActiveOrder: () => void;
+  setActiveOrder: (orderId: string, status?: string) => void;
   clearError: () => void;
   resetBookingFlow: () => void;
 }
@@ -107,6 +107,7 @@ function errorMessage(error: unknown, fallback: string) {
 export const useCustomerStore = create<CustomerState>((set, get) => ({
   quotes: [],
   activeOrderStatus: undefined,
+  dismissedOrderId: undefined,
   draftPickup: undefined,
   draftDrop: undefined,
   goodsDescription: DEFAULTS.goodsDescription,
@@ -316,6 +317,7 @@ export const useCustomerStore = create<CustomerState>((set, get) => ({
         creating: false,
         activeOrderId: orderId,
         activeOrderStatus: String(response.data.order_status ?? 'MATCHING'),
+        dismissedOrderId: undefined,
         estimatedPrice: response.data.estimated_price,
         dispatchMode: response.data.dispatch_mode,
         generatedEwayBillNumber: ewayBillNumber,
@@ -339,17 +341,19 @@ export const useCustomerStore = create<CustomerState>((set, get) => ({
     const eway = response.data?.ewayBillNumber as string | undefined;
     const status = response.data?.status as string | undefined;
 
-    if (eway) {
-      set({ generatedEwayBillNumber: eway });
+    if (status === 'CANCELLED') {
+      set({
+        generatedEwayBillNumber: eway,
+        dismissedOrderId: orderId,
+        activeOrderId: undefined,
+        activeOrderStatus: undefined
+      });
+      return response.data;
     }
 
     set({
-      activeOrderStatus: status,
-      ...(status && isTerminalOrderStatus(status)
-        ? {
-            activeOrderId: undefined
-          }
-        : {})
+      generatedEwayBillNumber: eway,
+      activeOrderStatus: status
     });
 
     return response.data;
@@ -402,5 +406,19 @@ export const useCustomerStore = create<CustomerState>((set, get) => ({
 
     const response = await api.get(`/orders/${orderId}/location-history`);
     return response.data;
+  },
+  dismissActiveOrder() {
+    const currentOrderId = get().activeOrderId;
+    set({
+      dismissedOrderId: currentOrderId,
+      activeOrderId: undefined,
+      activeOrderStatus: undefined
+    });
+  },
+  setActiveOrder(orderId, status) {
+    set({
+      activeOrderId: orderId,
+      activeOrderStatus: status
+    });
   }
 }));

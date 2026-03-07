@@ -18,6 +18,10 @@ CASHFREE_CLIENT_ID_INPUT="${CASHFREE_CLIENT_ID:-replace-me}"
 CASHFREE_CLIENT_SECRET_INPUT="${CASHFREE_CLIENT_SECRET:-replace-me}"
 CASHFREE_KYC_API_URL_INPUT="${CASHFREE_KYC_API_URL:-replace-me}"
 CASHFREE_API_VERSION_INPUT="${CASHFREE_API_VERSION:-2023-08-01}"
+QUICKEKYC_API_URL_INPUT="${QUICKEKYC_API_URL:-https://api.quickekyc.com/api/v1}"
+QUICKEKYC_API_KEY_INPUT="${QUICKEKYC_API_KEY:-replace-me}"
+QUICKEKYC_API_KEY_HEADER_INPUT="${QUICKEKYC_API_KEY_HEADER:-x-api-key}"
+QUICKEKYC_USE_AUTHORIZATION_HEADER_INPUT="${QUICKEKYC_USE_AUTHORIZATION_HEADER:-false}"
 FCM_SERVER_KEY_INPUT="${FCM_SERVER_KEY:-replace-me}"
 TWILIO_ACCOUNT_SID_INPUT="${TWILIO_ACCOUNT_SID:-replace-me}"
 TWILIO_AUTH_TOKEN_INPUT="${TWILIO_AUTH_TOKEN:-replace-me}"
@@ -44,7 +48,7 @@ Usage:
     [--postgres-service Postgres] \
     [--redis-service Redis] \
     [--route-provider mock|google] \
-    [--kyc-provider mock|idfy|cashfree] \
+    [--kyc-provider mock|idfy|cashfree|quickekyc] \
     [--push-provider mock|fcm] \
     [--otp-provider mock|twilio] \
     [--google-maps-api-key your-key] \
@@ -55,6 +59,10 @@ Usage:
     [--cashfree-client-secret your-client-secret] \
     [--cashfree-kyc-api-url https://api.cashfree.com/verification/...] \
     [--cashfree-api-version 2023-08-01] \
+    [--quickekyc-api-url https://api.quickekyc.com/api/v1] \
+    [--quickekyc-api-key your-key] \
+    [--quickekyc-api-key-header x-api-key] \
+    [--quickekyc-use-authorization-header true|false] \
     [--fcm-server-key your-key] \
     [--twilio-account-sid ACxxxx] \
     [--twilio-auth-token xxxx] \
@@ -167,6 +175,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cashfree-api-version)
       CASHFREE_API_VERSION_INPUT="$2"
+      shift 2
+      ;;
+    --quickekyc-api-url)
+      QUICKEKYC_API_URL_INPUT="$2"
+      shift 2
+      ;;
+    --quickekyc-api-key)
+      QUICKEKYC_API_KEY_INPUT="$2"
+      shift 2
+      ;;
+    --quickekyc-api-key-header)
+      QUICKEKYC_API_KEY_HEADER_INPUT="$2"
+      shift 2
+      ;;
+    --quickekyc-use-authorization-header)
+      QUICKEKYC_USE_AUTHORIZATION_HEADER_INPUT="$2"
       shift 2
       ;;
     --fcm-server-key)
@@ -288,6 +312,10 @@ set_var "$BACKEND_SERVICE" "CASHFREE_CLIENT_ID=$CASHFREE_CLIENT_ID_INPUT"
 set_var "$BACKEND_SERVICE" "CASHFREE_CLIENT_SECRET=$CASHFREE_CLIENT_SECRET_INPUT"
 set_var "$BACKEND_SERVICE" "CASHFREE_KYC_API_URL=$CASHFREE_KYC_API_URL_INPUT"
 set_var "$BACKEND_SERVICE" "CASHFREE_API_VERSION=$CASHFREE_API_VERSION_INPUT"
+set_var "$BACKEND_SERVICE" "QUICKEKYC_API_URL=$QUICKEKYC_API_URL_INPUT"
+set_var "$BACKEND_SERVICE" "QUICKEKYC_API_KEY=$QUICKEKYC_API_KEY_INPUT"
+set_var "$BACKEND_SERVICE" "QUICKEKYC_API_KEY_HEADER=$QUICKEKYC_API_KEY_HEADER_INPUT"
+set_var "$BACKEND_SERVICE" "QUICKEKYC_USE_AUTHORIZATION_HEADER=$QUICKEKYC_USE_AUTHORIZATION_HEADER_INPUT"
 set_var "$BACKEND_SERVICE" "FCM_SERVER_KEY=$FCM_SERVER_KEY_INPUT"
 set_var "$BACKEND_SERVICE" "TWILIO_ACCOUNT_SID=$TWILIO_ACCOUNT_SID_INPUT"
 set_var "$BACKEND_SERVICE" "TWILIO_AUTH_TOKEN=$TWILIO_AUTH_TOKEN_INPUT"

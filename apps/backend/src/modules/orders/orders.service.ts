@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InsurancePlan, OrderStatus, VehicleType } from '@prisma/client';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { InsurancePlan, OrderStatus, TripOfferStatus, VehicleType } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DispatchService } from '../dispatch/dispatch.service';
@@ -388,7 +388,12 @@ export class OrdersService {
   }
 
   async cancel(orderId: string) {
-    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        trip: true
+      }
+    });
     if (!order) {
       throw new NotFoundException('Order not found');
     }
@@ -397,11 +402,38 @@ export class OrdersService {
       return order;
     }
 
-    return this.prisma.order.update({
-      where: { id: orderId },
-      data: {
-        status: OrderStatus.CANCELLED
-      }
+    const cancellableStatuses: OrderStatus[] = [OrderStatus.CREATED, OrderStatus.MATCHING];
+    if (!cancellableStatuses.includes(order.status)) {
+      throw new BadRequestException('Booking can only be cancelled while it is being matched.');
+    }
+
+    if (order.trip) {
+      throw new BadRequestException('Booking is already assigned and can no longer be cancelled.');
+    }
+
+    const elapsedMs = Date.now() - order.createdAt.getTime();
+    if (elapsedMs > 60 * 1000) {
+      throw new BadRequestException('Cancellation window expired. You can cancel only within 1 minute.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.tripOffer.updateMany({
+        where: {
+          orderId,
+          status: TripOfferStatus.PENDING
+        },
+        data: {
+          status: TripOfferStatus.CANCELLED,
+          respondedAt: new Date()
+        }
+      });
+
+      return tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: OrderStatus.CANCELLED
+        }
+      });
     });
   }
 

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +15,28 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../types/navigation';
 import { type PaymentMethod, isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
 import MapView, { Marker, Polyline } from '../../components/maps';
+import api from '../../services/api';
+import appConfig from '../../../app.json';
+
+interface RouteCoordinate {
+  latitude: number;
+  longitude: number;
+}
+
+const MOBILE_GOOGLE_MAPS_API_KEY =
+  typeof (
+    appConfig as {
+      expo?: { extra?: { googleMapsApiKey?: unknown } };
+    }
+  ).expo?.extra?.googleMapsApiKey === 'string'
+    ? String(
+        (
+          appConfig as {
+            expo?: { extra?: { googleMapsApiKey?: unknown } };
+          }
+        ).expo?.extra?.googleMapsApiKey
+      ).trim()
+    : '';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerTripSelect'>;
 
@@ -65,6 +87,138 @@ function formatPromoTag(input: { cheapest: boolean; fastest: boolean; rating?: n
   return { label: 'Standard fare', tone: 'DEFAULT' as const };
 }
 
+function decodePolyline(encoded: string) {
+  const points: RouteCoordinate[] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+
+  while (index < encoded.length) {
+    let shift = 0;
+    let result = 0;
+    let byte: number;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length + 1);
+
+    const deltaLat = result & 1 ? ~(result >> 1) : result >> 1;
+    lat += deltaLat;
+
+    shift = 0;
+    result = 0;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length + 1);
+
+    const deltaLng = result & 1 ? ~(result >> 1) : result >> 1;
+    lng += deltaLng;
+
+    points.push({
+      latitude: lat / 1e5,
+      longitude: lng / 1e5
+    });
+  }
+
+  return points;
+}
+
+async function fetchRouteDirect(input: {
+  originLat: number;
+  originLng: number;
+  destinationLat: number;
+  destinationLng: number;
+}) {
+  if (!MOBILE_GOOGLE_MAPS_API_KEY) {
+    return [] as RouteCoordinate[];
+  }
+
+  const params = new URLSearchParams({
+    origin: `${input.originLat},${input.originLng}`,
+    destination: `${input.destinationLat},${input.destinationLng}`,
+    mode: 'driving',
+    alternatives: 'false',
+    departure_time: 'now',
+    key: MOBILE_GOOGLE_MAPS_API_KEY
+  });
+
+  try {
+    const response = await fetch(`https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`);
+    if (response.ok) {
+      const payload = (await response.json()) as {
+        routes?: Array<{
+          overview_polyline?: { points?: string };
+        }>;
+      };
+
+      const encoded = payload.routes?.[0]?.overview_polyline?.points;
+      if (encoded) {
+        return decodePolyline(encoded);
+      }
+    }
+  } catch {
+    // Fallback to Routes API (new)
+  }
+
+  try {
+    const modernResponse = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': MOBILE_GOOGLE_MAPS_API_KEY,
+        'X-Goog-FieldMask': 'routes.polyline.encodedPolyline'
+      },
+      body: JSON.stringify({
+        origin: {
+          location: {
+            latLng: {
+              latitude: input.originLat,
+              longitude: input.originLng
+            }
+          }
+        },
+        destination: {
+          location: {
+            latLng: {
+              latitude: input.destinationLat,
+              longitude: input.destinationLng
+            }
+          }
+        },
+        travelMode: 'DRIVE',
+        routingPreference: 'TRAFFIC_AWARE',
+        computeAlternativeRoutes: false,
+        polylineQuality: 'HIGH_QUALITY',
+        units: 'METRIC',
+        languageCode: 'en-US'
+      })
+    });
+
+    if (!modernResponse.ok) {
+      return [] as RouteCoordinate[];
+    }
+
+    const payload = (await modernResponse.json()) as {
+      routes?: Array<{
+        polyline?: {
+          encodedPolyline?: string;
+        };
+      }>;
+    };
+
+    const encoded = payload.routes?.[0]?.polyline?.encodedPolyline;
+    return encoded ? decodePolyline(encoded) : ([] as RouteCoordinate[]);
+  } catch {
+    return [] as RouteCoordinate[];
+  }
+}
+
 export function CustomerTripSelectScreen({ navigation }: Props) {
   const {
     quotes,
@@ -86,6 +240,7 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
     fetchQuotes,
     clearError
   } = useCustomerStore();
+  const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinate[]>([]);
 
   const hasRoute = Boolean(draftPickup && draftDrop);
   const selectedMeta = selectedVehicle ? VEHICLE_UI_META[selectedVehicle.vehicleType] : null;
@@ -113,6 +268,100 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
     }),
     [draftDrop?.lat, draftDrop?.lng, draftPickup?.lat, draftPickup?.lng, hasRoute]
   );
+
+  useEffect(() => {
+    if (!draftPickup || !draftDrop) {
+      setRouteCoordinates([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadRoute = async () => {
+      try {
+        const response = await api.get('/maps/routes', {
+          params: {
+            originLat: draftPickup.lat,
+            originLng: draftPickup.lng,
+            destinationLat: draftDrop.lat,
+            destinationLng: draftDrop.lng
+          }
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        const payload = response.data as {
+          route?: {
+            polyline?: Array<{ lat: number; lng: number }>;
+          };
+        };
+
+        const backendRoute = Array.isArray(payload.route?.polyline)
+          ? payload.route.polyline
+              .map((point) => ({
+                latitude: Number(point.lat),
+                longitude: Number(point.lng)
+              }))
+              .filter((point) => !Number.isNaN(point.latitude) && !Number.isNaN(point.longitude))
+          : [];
+
+        if (backendRoute.length > 1) {
+          setRouteCoordinates(backendRoute);
+          return;
+        }
+
+        const directRoute = await fetchRouteDirect({
+          originLat: draftPickup.lat,
+          originLng: draftPickup.lng,
+          destinationLat: draftDrop.lat,
+          destinationLng: draftDrop.lng
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        if (directRoute.length > 1) {
+          setRouteCoordinates(directRoute);
+          return;
+        }
+
+        setRouteCoordinates([
+          { latitude: draftPickup.lat, longitude: draftPickup.lng },
+          { latitude: draftDrop.lat, longitude: draftDrop.lng }
+        ]);
+      } catch {
+        const directRoute = await fetchRouteDirect({
+          originLat: draftPickup.lat,
+          originLng: draftPickup.lng,
+          destinationLat: draftDrop.lat,
+          destinationLng: draftDrop.lng
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        if (directRoute.length > 1) {
+          setRouteCoordinates(directRoute);
+          return;
+        }
+
+        setRouteCoordinates([
+          { latitude: draftPickup.lat, longitude: draftPickup.lng },
+          { latitude: draftDrop.lat, longitude: draftDrop.lng }
+        ]);
+      }
+    };
+
+    void loadRoute();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draftDrop?.lat, draftDrop?.lng, draftPickup?.lat, draftPickup?.lng]);
 
   const submitBooking = async () => {
     if (activeOrderId && isOngoingOrderStatus(activeOrderStatus)) {
@@ -194,10 +443,14 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
             ) : null}
             {draftPickup && draftDrop ? (
               <Polyline
-                coordinates={[
-                  { latitude: draftPickup.lat, longitude: draftPickup.lng },
-                  { latitude: draftDrop.lat, longitude: draftDrop.lng }
-                ]}
+                coordinates={
+                  routeCoordinates.length > 1
+                    ? routeCoordinates
+                    : [
+                        { latitude: draftPickup.lat, longitude: draftPickup.lng },
+                        { latitude: draftDrop.lat, longitude: draftDrop.lng }
+                      ]
+                }
                 strokeColor="#0F766E"
                 strokeWidth={4}
               />
@@ -247,7 +500,15 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
             <Text style={styles.filterChip}>INR {goodsValue.toFixed(0)}</Text>
           </View>
 
-          <ScrollView style={styles.list} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
+            alwaysBounceHorizontal={false}
+            bounces={false}
+            directionalLockEnabled
+          >
             {quotes.map((quote) => {
               const meta = VEHICLE_UI_META[quote.vehicleType as VehicleType];
               const active = selectedVehicle?.vehicleType === quote.vehicleType;
@@ -465,6 +726,9 @@ const styles = StyleSheet.create({
   },
   sheet: {
     flex: 1,
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
     marginTop: -8,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,

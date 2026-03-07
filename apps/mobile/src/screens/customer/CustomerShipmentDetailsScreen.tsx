@@ -108,7 +108,14 @@ export function CustomerShipmentDetailsScreen({ navigation }: Props) {
           <View style={styles.backButton} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          showsHorizontalScrollIndicator={false}
+          alwaysBounceHorizontal={false}
+          bounces={false}
+          directionalLockEnabled
+        >
           <View style={styles.heroCard}>
             <Text style={styles.heroTitle}>Bharat-ready transport setup</Text>
             <Text style={styles.heroSub}>Configure goods, insurance, and GST compliance before booking.</Text>
@@ -215,6 +222,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFF8F1',
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 14

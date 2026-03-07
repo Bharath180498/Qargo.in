@@ -34,6 +34,12 @@ export default () => ({
     kycApiUrl: process.env.CASHFREE_KYC_API_URL ?? '',
     apiVersion: process.env.CASHFREE_API_VERSION ?? '2023-08-01'
   },
+  quickeKyc: {
+    apiUrl: process.env.QUICKEKYC_API_URL ?? 'https://api.quickekyc.com/api/v1',
+    apiKey: process.env.QUICKEKYC_API_KEY ?? '',
+    apiKeyHeader: process.env.QUICKEKYC_API_KEY_HEADER ?? 'x-api-key',
+    useAuthorizationHeader: process.env.QUICKEKYC_USE_AUTHORIZATION_HEADER === 'true'
+  },
   fcmServerKey: process.env.FCM_SERVER_KEY ?? '',
   razorpay: {
     keyId: process.env.RAZORPAY_KEY_ID ?? '',

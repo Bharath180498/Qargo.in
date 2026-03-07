@@ -1,16 +1,216 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Linking, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { io } from 'socket.io-client';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import api, { REALTIME_BASE_URL } from '../../services/api';
 import { useCustomerStore } from '../../store/useCustomerStore';
 import type { RootStackParamList } from '../../types/navigation';
 import MapView, { Marker, Polyline } from '../../components/maps';
+import appConfig from '../../../app.json';
 
 interface DriverPoint {
   lat: number;
   lng: number;
   timestamp: string;
+}
+
+interface RouteCoordinate {
+  latitude: number;
+  longitude: number;
+}
+
+const TRIP_STAGES: Array<{ key: string; label: string }> = [
+  { key: 'ASSIGNED', label: 'Assigned' },
+  { key: 'DRIVER_EN_ROUTE', label: 'En route' },
+  { key: 'ARRIVED_PICKUP', label: 'At pickup' },
+  { key: 'LOADING', label: 'Loading' },
+  { key: 'IN_TRANSIT', label: 'In transit' },
+  { key: 'COMPLETED', label: 'Delivered' }
+];
+
+const MOBILE_GOOGLE_MAPS_API_KEY =
+  typeof (
+    appConfig as {
+      expo?: { extra?: { googleMapsApiKey?: unknown } };
+    }
+  ).expo?.extra?.googleMapsApiKey === 'string'
+    ? String(
+        (
+          appConfig as {
+            expo?: { extra?: { googleMapsApiKey?: unknown } };
+          }
+        ).expo?.extra?.googleMapsApiKey
+      ).trim()
+    : '';
+
+function decodePolyline(encoded: string) {
+  const points: RouteCoordinate[] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+
+  while (index < encoded.length) {
+    let shift = 0;
+    let result = 0;
+    let byte: number;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length + 1);
+
+    const deltaLat = result & 1 ? ~(result >> 1) : result >> 1;
+    lat += deltaLat;
+
+    shift = 0;
+    result = 0;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length + 1);
+
+    const deltaLng = result & 1 ? ~(result >> 1) : result >> 1;
+    lng += deltaLng;
+
+    points.push({
+      latitude: lat / 1e5,
+      longitude: lng / 1e5
+    });
+  }
+
+  return points;
+}
+
+function haversineDistanceKm(from: { lat: number; lng: number }, to: { lat: number; lng: number }) {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(to.lat - from.lat);
+  const dLng = toRad(to.lng - from.lng);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusKm * c;
+}
+
+function vehicleEmoji(vehicleType?: string) {
+  if (vehicleType === 'THREE_WHEELER') {
+    return '🛺';
+  }
+  if (vehicleType === 'MINI_TRUCK') {
+    return '🚚';
+  }
+  return '🚛';
+}
+
+async function fetchRouteDirect(input: {
+  originLat: number;
+  originLng: number;
+  destinationLat: number;
+  destinationLng: number;
+}) {
+  if (!MOBILE_GOOGLE_MAPS_API_KEY) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    origin: `${input.originLat},${input.originLng}`,
+    destination: `${input.destinationLat},${input.destinationLng}`,
+    mode: 'driving',
+    alternatives: 'false',
+    departure_time: 'now',
+    key: MOBILE_GOOGLE_MAPS_API_KEY
+  });
+
+  try {
+    const response = await fetch(`https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`);
+    if (response.ok) {
+      const payload = (await response.json()) as {
+        routes?: Array<{
+          overview_polyline?: { points?: string };
+          legs?: Array<{
+            distance?: { value?: number };
+          }>;
+        }>;
+      };
+
+      const route = payload.routes?.[0];
+      const encodedPolyline = route?.overview_polyline?.points;
+      if (encodedPolyline) {
+        return {
+          coordinates: decodePolyline(encodedPolyline),
+          distanceKm: Number((Number(route?.legs?.[0]?.distance?.value ?? 0) / 1000).toFixed(2))
+        };
+      }
+    }
+  } catch {
+    // Fallback to Routes API (new)
+  }
+
+  try {
+    const modernResponse = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': MOBILE_GOOGLE_MAPS_API_KEY,
+        'X-Goog-FieldMask': 'routes.distanceMeters,routes.polyline.encodedPolyline'
+      },
+      body: JSON.stringify({
+        origin: {
+          location: {
+            latLng: {
+              latitude: input.originLat,
+              longitude: input.originLng
+            }
+          }
+        },
+        destination: {
+          location: {
+            latLng: {
+              latitude: input.destinationLat,
+              longitude: input.destinationLng
+            }
+          }
+        },
+        travelMode: 'DRIVE',
+        routingPreference: 'TRAFFIC_AWARE',
+        computeAlternativeRoutes: false,
+        polylineQuality: 'HIGH_QUALITY',
+        units: 'METRIC',
+        languageCode: 'en-US'
+      })
+    });
+
+    if (!modernResponse.ok) {
+      return null;
+    }
+
+    const payload = (await modernResponse.json()) as {
+      routes?: Array<{
+        distanceMeters?: number;
+        polyline?: {
+          encodedPolyline?: string;
+        };
+      }>;
+    };
+
+    const route = payload.routes?.[0];
+    const encodedPolyline = route?.polyline?.encodedPolyline;
+    if (!route || !encodedPolyline) {
+      return null;
+    }
+
+    return {
+      coordinates: decodePolyline(encodedPolyline),
+      distanceKm: Number((Number(route.distanceMeters ?? 0) / 1000).toFixed(2))
+    };
+  } catch {
+    return null;
+  }
 }
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerTracking'>;
@@ -37,6 +237,7 @@ export function CustomerTrackingScreen({ navigation }: Props) {
   const refreshLocationHistory = useCustomerStore((state) => state.refreshLocationHistory);
   const activeOrderId = useCustomerStore((state) => state.activeOrderId);
   const generatedEwayBillNumber = useCustomerStore((state) => state.generatedEwayBillNumber);
+  const dismissActiveOrder = useCustomerStore((state) => state.dismissActiveOrder);
 
   const [order, setOrder] = useState<any>();
   const [timeline, setTimeline] = useState<any[]>([]);
@@ -44,6 +245,20 @@ export function CustomerTrackingScreen({ navigation }: Props) {
   const [dispatchDecisions, setDispatchDecisions] = useState<any[]>([]);
   const [rating, setRating] = useState(5);
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
+  const [tipAmount, setTipAmount] = useState(0);
+  const [summaryClosed, setSummaryClosed] = useState(false);
+  const [clockNow, setClockNow] = useState(Date.now());
+  const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinate[]>([]);
+  const [driverDistanceKm, setDriverDistanceKm] = useState<number | undefined>();
+
+  useEffect(() => {
+    setOrder(undefined);
+    setTimeline([]);
+    setPoints([]);
+    setDispatchDecisions([]);
+    setRouteCoordinates([]);
+    setDriverDistanceKm(undefined);
+  }, [activeOrderId]);
 
   useEffect(() => {
     const load = async () => {
@@ -82,6 +297,17 @@ export function CustomerTrackingScreen({ navigation }: Props) {
   }, [activeOrderId, refreshLocationHistory, refreshOrder, refreshTimeline]);
 
   useEffect(() => {
+    setSummaryClosed(false);
+    setRatingSubmitted(false);
+    setTipAmount(0);
+  }, [activeOrderId]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setClockNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!activeOrderId) {
       return;
     }
@@ -94,6 +320,33 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     socket.on('connect', () => {
       socket.emit('subscribe:order', { orderId: activeOrderId });
     });
+
+    const refreshSnapshot = () => {
+      void Promise.all([refreshOrder(), refreshTimeline(), refreshLocationHistory()]).then(
+        ([latestOrder, latestTimeline, latestHistory]) => {
+          if (latestOrder) {
+            setOrder(latestOrder);
+          }
+
+          if (latestTimeline?.timeline) {
+            setTimeline(latestTimeline.timeline);
+          }
+
+          if (latestHistory?.points) {
+            setPoints(
+              (latestHistory.points ?? [])
+                .map((item: any) => ({
+                  lat: Number(item.lat),
+                  lng: Number(item.lng),
+                  timestamp: item.timestamp
+                }))
+                .filter((item: DriverPoint) => !Number.isNaN(item.lat) && !Number.isNaN(item.lng))
+                .reverse()
+            );
+          }
+        }
+      );
+    };
 
     socket.on('driver:location', (payload) => {
       if (!payload || typeof payload.lat !== 'number' || typeof payload.lng !== 'number') {
@@ -111,13 +364,17 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     });
 
     socket.on('trip:completed', () => {
-      void refreshOrder().then(setOrder);
+      refreshSnapshot();
     });
+    socket.on('trip:driver-en-route', refreshSnapshot);
+    socket.on('trip:arrived-pickup', refreshSnapshot);
+    socket.on('trip:loading-started', refreshSnapshot);
+    socket.on('trip:in-transit', refreshSnapshot);
 
     return () => {
       socket.disconnect();
     };
-  }, [activeOrderId, refreshOrder]);
+  }, [activeOrderId, refreshLocationHistory, refreshOrder, refreshTimeline]);
 
   const pickup = {
     latitude: order?.pickupLat ?? 12.9716,
@@ -167,6 +424,168 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     : dispatchDecisions.length > 1
       ? `Checked ${dispatchDecisions.length} nearby driver option(s).`
       : 'Checking nearby available drivers now.';
+  const normalizedTripStatus =
+    order?.trip?.status === 'COMPLETED' || order?.status === 'DELIVERED'
+      ? 'COMPLETED'
+      : order?.trip?.status;
+  const currentStageIndex = useMemo(
+    () => TRIP_STAGES.findIndex((stage) => stage.key === (normalizedTripStatus ?? 'ASSIGNED')),
+    [normalizedTripStatus]
+  );
+  const paymentStatusDisplay =
+    order?.payment?.provider === 'WALLET' && order?.payment?.status === 'PENDING'
+      ? 'CASH ON DELIVERY'
+      : order?.payment?.status ?? 'PENDING';
+  const paymentSubtitle =
+    order?.payment?.provider === 'WALLET' && order?.payment?.status === 'PENDING'
+      ? 'Cash selected, to be collected at delivery'
+      : `${order?.payment?.status ?? 'Pending payment'} - tap to pay or change method`;
+  const isCancelledOrder = order?.status === 'CANCELLED';
+  const showCompletionSheet = order?.status === 'DELIVERED' && !summaryClosed && !isCancelledOrder;
+  const cancellationRemainingSeconds = useMemo(() => {
+    if (!order?.createdAt) {
+      return 0;
+    }
+
+    const createdAtMs = new Date(order.createdAt).getTime();
+    if (Number.isNaN(createdAtMs)) {
+      return 0;
+    }
+
+    const remainingMs = createdAtMs + 60 * 1000 - clockNow;
+    return Math.max(0, Math.ceil(remainingMs / 1000));
+  }, [clockNow, order?.createdAt]);
+  const canCancelBooking =
+    Boolean(activeOrderId) &&
+    ['CREATED', 'MATCHING'].includes(String(order?.status ?? '')) &&
+    cancellationRemainingSeconds > 0;
+  const routeDestinationLabel =
+    normalizedTripStatus === 'IN_TRANSIT' || normalizedTripStatus === 'COMPLETED' ? 'drop' : 'pickup';
+  const routeDestinationLat =
+    normalizedTripStatus === 'IN_TRANSIT' || normalizedTripStatus === 'COMPLETED'
+      ? drop.latitude
+      : pickup.latitude;
+  const routeDestinationLng =
+    normalizedTripStatus === 'IN_TRANSIT' || normalizedTripStatus === 'COMPLETED'
+      ? drop.longitude
+      : pickup.longitude;
+  const routeOriginLat = liveDriver?.lat ?? pickup.latitude;
+  const routeOriginLng = liveDriver?.lng ?? pickup.longitude;
+  const driverDistanceLabel =
+    typeof driverDistanceKm === 'number'
+      ? `${driverDistanceKm.toFixed(1)} km to ${routeDestinationLabel}`
+      : 'Distance will appear once driver location is live';
+
+  useEffect(() => {
+    if (!activeOrderId) {
+      setRouteCoordinates([]);
+      setDriverDistanceKm(undefined);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadRoute = async () => {
+      try {
+        const response = await api.get('/maps/routes', {
+          params: {
+            originLat: routeOriginLat,
+            originLng: routeOriginLng,
+            destinationLat: routeDestinationLat,
+            destinationLng: routeDestinationLng
+          }
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        const payload = response.data as {
+          route?: {
+            distanceMeters?: number;
+            polyline?: Array<{ lat: number; lng: number }>;
+          };
+        };
+
+        const polyline = Array.isArray(payload.route?.polyline) ? payload.route?.polyline : [];
+        const coordinates = polyline
+          .map((point) => ({
+            latitude: Number(point.lat),
+            longitude: Number(point.lng)
+          }))
+          .filter((point) => !Number.isNaN(point.latitude) && !Number.isNaN(point.longitude));
+
+        if (coordinates.length > 1) {
+          setRouteCoordinates(coordinates);
+        } else {
+          setRouteCoordinates([
+            { latitude: routeOriginLat, longitude: routeOriginLng },
+            { latitude: routeDestinationLat, longitude: routeDestinationLng }
+          ]);
+        }
+
+        if (liveDriver && typeof payload.route?.distanceMeters === 'number') {
+          setDriverDistanceKm(Number((payload.route.distanceMeters / 1000).toFixed(2)));
+        } else if (liveDriver) {
+          setDriverDistanceKm(
+            Number(
+              haversineDistanceKm(
+                { lat: routeOriginLat, lng: routeOriginLng },
+                { lat: routeDestinationLat, lng: routeDestinationLng }
+              ).toFixed(2)
+            )
+          );
+        } else {
+          setDriverDistanceKm(undefined);
+        }
+      } catch {
+        const direct = await fetchRouteDirect({
+          originLat: routeOriginLat,
+          originLng: routeOriginLng,
+          destinationLat: routeDestinationLat,
+          destinationLng: routeDestinationLng
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        if (direct && direct.coordinates.length > 1) {
+          setRouteCoordinates(direct.coordinates);
+          setDriverDistanceKm(liveDriver ? direct.distanceKm : undefined);
+          return;
+        }
+
+        setRouteCoordinates([
+          { latitude: routeOriginLat, longitude: routeOriginLng },
+          { latitude: routeDestinationLat, longitude: routeDestinationLng }
+        ]);
+        setDriverDistanceKm(
+          liveDriver
+            ? Number(
+                haversineDistanceKm(
+                  { lat: routeOriginLat, lng: routeOriginLng },
+                  { lat: routeDestinationLat, lng: routeDestinationLng }
+                ).toFixed(2)
+              )
+            : undefined
+        );
+      }
+    };
+
+    void loadRoute();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeOrderId,
+    liveDriver,
+    routeDestinationLat,
+    routeDestinationLng,
+    routeOriginLat,
+    routeOriginLng
+  ]);
 
   const submitRating = async () => {
     const tripId = order?.trip?.id;
@@ -210,6 +629,47 @@ export function CustomerTrackingScreen({ navigation }: Props) {
   };
 
   const ewayDisplay = order?.ewayBillNumber ?? generatedEwayBillNumber;
+  const finishTripSummary = () => {
+    if (tipAmount > 0) {
+      Alert.alert('Tip noted', `Thanks for adding INR ${tipAmount}.`);
+    }
+
+    setSummaryClosed(true);
+    dismissActiveOrder();
+    navigation.navigate('CustomerHome');
+  };
+
+  const clearCancelledTrip = () => {
+    dismissActiveOrder();
+    navigation.navigate('CustomerHome');
+  };
+
+  const cancelBooking = async () => {
+    if (!activeOrderId) {
+      return;
+    }
+
+    Alert.alert('Cancel booking?', 'You can cancel only within 1 minute while matching.', [
+      { text: 'Keep booking', style: 'cancel' },
+      {
+        text: 'Cancel booking',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await api.post(`/orders/${activeOrderId}/cancel`);
+            dismissActiveOrder();
+            Alert.alert('Booking cancelled', 'Your booking has been cancelled successfully.');
+            navigation.navigate('CustomerHome');
+          } catch (error: any) {
+            const message =
+              error?.response?.data?.message ??
+              (typeof error?.message === 'string' ? error.message : 'Could not cancel booking.');
+            Alert.alert('Unable to cancel', Array.isArray(message) ? message.join('\n') : String(message));
+          }
+        }
+      }
+    ]);
+  };
 
   if (!activeOrderId) {
     return (
@@ -225,11 +685,52 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     );
   }
 
+  if (!order) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyTitle}>Loading trip details...</Text>
+          <Text style={styles.emptySubtitle}>Fetching latest status from server.</Text>
+          <Pressable style={styles.emptyButton} onPress={() => navigation.navigate('CustomerHome')}>
+            <Text style={styles.emptyButtonText}>Go to Home</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (isCancelledOrder) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyTitle}>This booking was cancelled</Text>
+          <Text style={styles.emptySubtitle}>
+            The trip is not active anymore. You can create a fresh booking now.
+          </Text>
+          <View style={styles.cancelledActions}>
+            <Pressable style={styles.emptyButton} onPress={clearCancelledTrip}>
+              <Text style={styles.emptyButtonText}>Back to Home</Text>
+            </Pressable>
+            <Pressable
+              style={styles.cancelledSecondary}
+              onPress={() => {
+                clearCancelledTrip();
+                navigation.navigate('CustomerPickupConfirm');
+              }}
+            >
+              <Text style={styles.cancelledSecondaryText}>Book Again</Text>
+            </Pressable>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
         <View style={styles.mapWrap}>
-          <MapView style={styles.map} initialRegion={region} region={region}>
+          <MapView style={styles.map} initialRegion={region}>
             <Marker coordinate={pickup} title="Pickup" />
             <Marker coordinate={drop} title="Drop" pinColor="#F97316" />
 
@@ -237,11 +738,18 @@ export function CustomerTrackingScreen({ navigation }: Props) {
               <Marker
                 coordinate={{ latitude: liveDriver.lat, longitude: liveDriver.lng }}
                 title="Driver"
-                pinColor="#0F766E"
-              />
+              >
+                <View style={styles.driverMarker}>
+                  <Text style={styles.driverMarkerEmoji}>{vehicleEmoji(assignedDriverVehicle?.type)}</Text>
+                </View>
+              </Marker>
             ) : null}
 
-            <Polyline coordinates={[pickup, drop]} strokeColor="#94A3B8" strokeWidth={3} />
+            {routeCoordinates.length > 1 ? (
+              <Polyline coordinates={routeCoordinates} strokeColor="#2563EB" strokeWidth={4} />
+            ) : (
+              <Polyline coordinates={[pickup, drop]} strokeColor="#94A3B8" strokeWidth={3} />
+            )}
 
             {points.length > 1 ? (
               <Polyline
@@ -256,7 +764,7 @@ export function CustomerTrackingScreen({ navigation }: Props) {
           </MapView>
 
           <Pressable style={styles.backButton} onPress={() => navigation.navigate('CustomerHome')}>
-            <Text style={styles.backButtonText}>{'<'}</Text>
+            <Text style={styles.backButtonText}>Home</Text>
           </Pressable>
         </View>
 
@@ -274,6 +782,15 @@ export function CustomerTrackingScreen({ navigation }: Props) {
             <View style={styles.matchingTrack}>
               <View style={[styles.matchingFill, { width: `${Math.round(matchingProgress * 100)}%` }]} />
             </View>
+            {hasAssignedDriver ? <Text style={styles.driverDistanceText}>{driverDistanceLabel}</Text> : null}
+            {canCancelBooking ? (
+              <View style={styles.cancelRow}>
+                <Text style={styles.cancelHint}>Cancel available for {cancellationRemainingSeconds}s</Text>
+                <Pressable style={styles.cancelButton} onPress={() => void cancelBooking()}>
+                  <Text style={styles.cancelButtonText}>Cancel booking</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.infoGrid}>
@@ -291,16 +808,36 @@ export function CustomerTrackingScreen({ navigation }: Props) {
             </View>
             <View style={styles.infoCard}>
               <Text style={styles.infoLabel}>Payment</Text>
-              <Text style={styles.infoValue}>{order?.payment?.status ?? 'PENDING'}</Text>
+              <Text style={styles.infoValue}>{paymentStatusDisplay}</Text>
             </View>
           </View>
 
           <Pressable style={styles.paymentAction} onPress={() => navigation.navigate('CustomerPayment')}>
             <Text style={styles.paymentActionTitle}>Payment</Text>
-            <Text style={styles.paymentActionSubtitle}>
-              {order?.payment?.status ?? 'Pending payment'} - tap to pay or change method
-            </Text>
+            <Text style={styles.paymentActionSubtitle}>{paymentSubtitle}</Text>
           </Pressable>
+
+          <View style={styles.stageCard}>
+            <Text style={styles.stageTitle}>Trip stage map</Text>
+            <View style={styles.stageRow}>
+              {TRIP_STAGES.map((stage, index) => {
+                const completed = currentStageIndex >= index;
+                const active = currentStageIndex === index;
+
+                return (
+                  <View key={stage.key} style={styles.stageItem}>
+                    <View style={styles.stageNodeWrap}>
+                      <View style={[styles.stageNode, completed && styles.stageNodeDone, active && styles.stageNodeActive]} />
+                      {index < TRIP_STAGES.length - 1 ? (
+                        <View style={[styles.stageLine, currentStageIndex > index && styles.stageLineDone]} />
+                      ) : null}
+                    </View>
+                    <Text style={[styles.stageLabel, completed && styles.stageLabelDone]}>{stage.label}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
 
           {assignedDriver ? (
             <View style={styles.driverCard}>
@@ -376,28 +913,73 @@ export function CustomerTrackingScreen({ navigation }: Props) {
             ))}
           </ScrollView>
 
-          {order?.status === 'DELIVERED' ? (
-            <View style={styles.ratingCard}>
-              <Text style={styles.ratingTitle}>Rate your driver</Text>
-              <View style={styles.ratingRow}>
-                {[1, 2, 3, 4, 5].map((value) => (
-                  <Pressable
-                    key={value}
-                    style={[styles.ratingDot, rating >= value && styles.ratingDotActive]}
-                    onPress={() => setRating(value)}
-                    disabled={ratingSubmitted}
-                  >
-                    <Text style={[styles.ratingDotText, rating >= value && styles.ratingDotTextActive]}>{value}</Text>
-                  </Pressable>
-                ))}
+        </View>
+      </View>
+
+      <Modal visible={showCompletionSheet} transparent animationType="slide" onRequestClose={finishTripSummary}>
+        <View style={styles.summaryBackdrop}>
+          <View style={styles.summarySheet}>
+            <View style={styles.summaryHandle} />
+            <Text style={styles.summaryTitle}>Trip completed</Text>
+            <Text style={styles.summarySub}>Review summary and tip your driver</Text>
+
+            <View style={styles.summaryStatsRow}>
+              <View style={styles.summaryStat}>
+                <Text style={styles.summaryStatLabel}>Final fare</Text>
+                <Text style={styles.summaryStatValue}>
+                  INR {Number(order?.finalPrice ?? order?.estimatedPrice ?? 0).toFixed(0)}
+                </Text>
               </View>
+              <View style={styles.summaryStat}>
+                <Text style={styles.summaryStatLabel}>Waiting charge</Text>
+                <Text style={styles.summaryStatValue}>INR {Number(order?.waitingCharge ?? 0).toFixed(0)}</Text>
+              </View>
+              <View style={styles.summaryStat}>
+                <Text style={styles.summaryStatLabel}>Payment</Text>
+                <Text style={styles.summaryStatValue}>{paymentStatusDisplay}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.summarySectionTitle}>Tip your driver</Text>
+            <View style={styles.tipRow}>
+              {[0, 20, 50, 100].map((amount) => (
+                <Pressable
+                  key={amount}
+                  style={[styles.tipChip, tipAmount === amount && styles.tipChipActive]}
+                  onPress={() => setTipAmount(amount)}
+                >
+                  <Text style={[styles.tipChipText, tipAmount === amount && styles.tipChipTextActive]}>
+                    {amount === 0 ? 'No tip' : `+INR ${amount}`}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={styles.summarySectionTitle}>Rate driver</Text>
+            <View style={styles.ratingRow}>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <Pressable
+                  key={value}
+                  style={[styles.ratingDot, rating >= value && styles.ratingDotActive]}
+                  onPress={() => setRating(value)}
+                  disabled={ratingSubmitted}
+                >
+                  <Text style={[styles.ratingDotText, rating >= value && styles.ratingDotTextActive]}>{value}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <View style={styles.summaryActions}>
               <Pressable style={styles.rateButton} onPress={() => void submitRating()} disabled={ratingSubmitted}>
                 <Text style={styles.rateButtonText}>{ratingSubmitted ? 'Rating submitted' : 'Submit rating'}</Text>
               </Pressable>
+              <Pressable style={styles.summaryDoneButton} onPress={finishTripSummary}>
+                <Text style={styles.summaryDoneButtonText}>Done</Text>
+              </Pressable>
             </View>
-          ) : null}
+          </View>
         </View>
-      </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -405,11 +987,13 @@ export function CustomerTrackingScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#FFF8F1'
+    backgroundColor: '#FFF8F1',
+    overflow: 'hidden'
   },
   container: {
     flex: 1,
-    backgroundColor: '#FFF8F1'
+    backgroundColor: '#FFF8F1',
+    overflow: 'hidden'
   },
   emptyWrap: {
     flex: 1,
@@ -442,6 +1026,25 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_700Bold',
     fontSize: 14
   },
+  cancelledActions: {
+    marginTop: 4,
+    width: '100%',
+    maxWidth: 280,
+    gap: 10
+  },
+  cancelledSecondary: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#0F766E',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    paddingVertical: 10
+  },
+  cancelledSecondaryText: {
+    color: '#0F766E',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 14
+  },
   mapWrap: {
     flex: 1,
     position: 'relative'
@@ -453,9 +1056,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 14,
     left: 14,
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    minWidth: 58,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     backgroundColor: '#FFFFFF',
@@ -465,9 +1068,30 @@ const styles = StyleSheet.create({
   backButtonText: {
     color: '#0F172A',
     fontFamily: 'Manrope_700Bold',
+    fontSize: 13
+  },
+  driverMarker: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 5
+  },
+  driverMarkerEmoji: {
     fontSize: 18
   },
   sheet: {
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
     marginTop: -8,
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
@@ -530,6 +1154,33 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#0F766E'
   },
+  driverDistanceText: {
+    color: '#1E3A8A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  cancelRow: {
+    marginTop: 4,
+    gap: 8
+  },
+  cancelHint: {
+    color: '#9A3412',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  cancelButton: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+    paddingVertical: 8
+  },
+  cancelButtonText: {
+    color: '#B91C1C',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13
+  },
   paymentAction: {
     borderRadius: 12,
     borderWidth: 1,
@@ -549,13 +1200,72 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_500Medium',
     fontSize: 12
   },
+  stageCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    padding: 10,
+    gap: 8
+  },
+  stageTitle: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13
+  },
+  stageRow: {
+    gap: 6
+  },
+  stageItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8
+  },
+  stageNodeWrap: {
+    alignItems: 'center'
+  },
+  stageNode: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+    marginTop: 2
+  },
+  stageNodeDone: {
+    borderColor: '#0F766E',
+    backgroundColor: '#99F6E4'
+  },
+  stageNodeActive: {
+    backgroundColor: '#0F766E'
+  },
+  stageLine: {
+    width: 2,
+    height: 18,
+    backgroundColor: '#CBD5E1',
+    marginTop: 2
+  },
+  stageLineDone: {
+    backgroundColor: '#0F766E'
+  },
+  stageLabel: {
+    color: '#64748B',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12
+  },
+  stageLabelDone: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold'
+  },
   infoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8
+    justifyContent: 'space-between',
+    rowGap: 8
   },
   infoCard: {
-    width: '48%',
+    width: '49%',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#E2E8F0',
@@ -627,10 +1337,11 @@ const styles = StyleSheet.create({
   driverInfoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8
+    justifyContent: 'space-between',
+    rowGap: 8
   },
   driverInfoItem: {
-    width: '48%',
+    width: '49%',
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#CCFBF1',
@@ -753,6 +1464,7 @@ const styles = StyleSheet.create({
     color: '#0F766E'
   },
   rateButton: {
+    flex: 1,
     borderRadius: 10,
     backgroundColor: '#0F766E',
     alignItems: 'center',
@@ -761,6 +1473,116 @@ const styles = StyleSheet.create({
   },
   rateButtonText: {
     color: '#ECFEFF',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13
+  },
+  summaryBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(15, 23, 42, 0.36)'
+  },
+  summarySheet: {
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 24,
+    gap: 10
+  },
+  summaryHandle: {
+    width: 44,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: '#CBD5E1',
+    alignSelf: 'center'
+  },
+  summaryTitle: {
+    color: '#0F172A',
+    fontFamily: 'Sora_700Bold',
+    fontSize: 20
+  },
+  summarySub: {
+    color: '#64748B',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 13
+  },
+  summaryStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 8
+  },
+  summaryStat: {
+    width: '32%',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    padding: 8
+  },
+  summaryStatLabel: {
+    color: '#64748B',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 11
+  },
+  summaryStatValue: {
+    marginTop: 2,
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  summarySectionTitle: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13
+  },
+  tipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
+  },
+  tipChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 7
+  },
+  tipChipActive: {
+    borderColor: '#0F766E',
+    backgroundColor: '#CCFBF1'
+  },
+  tipChipText: {
+    color: '#334155',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  tipChipTextActive: {
+    color: '#115E59'
+  },
+  summaryActions: {
+    flexDirection: 'row',
+    gap: 10
+  },
+  summaryDoneButton: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#0F766E',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF'
+  },
+  summaryDoneButtonText: {
+    color: '#0F766E',
     fontFamily: 'Manrope_700Bold',
     fontSize: 13
   }

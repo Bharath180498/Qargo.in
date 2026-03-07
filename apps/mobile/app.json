@@ -27,7 +27,8 @@
       ]
     },
     "extra": {
-        "apiBaseUrl": "https://backend-production-0ee70.up.railway.app/api"
+        "apiBaseUrl": "https://backend-production-0ee70.up.railway.app/api",
+        "googleMapsApiKey": "AIzaSyBa4kGEsQMiWJrrpEi_4AyZq-qBFgdzfGQ"
     }
   }
 }

@@ -20,6 +20,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { HealthModule } from './modules/health/health.module';
 import { DriverOnboardingModule } from './modules/driver-onboarding/driver-onboarding.module';
 import { KycModule } from './modules/kyc/kyc.module';
+import { MapsModule } from './modules/maps/maps.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { KycModule } from './modules/kyc/kyc.module';
     OrdersModule,
     TripsModule,
     KycModule,
+    MapsModule,
     AdminModule,
     HealthModule
   ]

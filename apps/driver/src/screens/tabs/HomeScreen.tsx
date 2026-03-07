@@ -26,6 +26,15 @@ const actionMap: Array<{ status: string; endpoint: string; label: string; payloa
   }
 ];
 
+const TRIP_STAGES: Array<{ key: string; label: string }> = [
+  { key: 'ASSIGNED', label: 'Assigned' },
+  { key: 'DRIVER_EN_ROUTE', label: 'To pickup' },
+  { key: 'ARRIVED_PICKUP', label: 'At pickup' },
+  { key: 'LOADING', label: 'Loading' },
+  { key: 'IN_TRANSIT', label: 'In transit' },
+  { key: 'COMPLETED', label: 'Delivered' }
+];
+
 export function HomeScreen() {
   const bootstrap = useDriverAppStore((state) => state.bootstrap);
   const availabilityStatus = useDriverAppStore((state) => state.availabilityStatus);
@@ -47,6 +56,10 @@ export function HomeScreen() {
   const activeOffer = pendingOffers[0];
   const activeAction = useMemo(
     () => actionMap.find((item) => item.status === currentJob?.status),
+    [currentJob?.status]
+  );
+  const currentStageIndex = useMemo(
+    () => TRIP_STAGES.findIndex((stage) => stage.key === (currentJob?.status ?? 'ASSIGNED')),
     [currentJob?.status]
   );
   const offerSecondsLeft = useMemo(() => {
@@ -262,6 +275,23 @@ export function HomeScreen() {
               <Text style={styles.info}>Pickup: {currentJob.order?.pickupAddress}</Text>
               <Text style={styles.info}>Drop: {currentJob.order?.dropAddress}</Text>
               <Text style={styles.info}>Stage: {currentJob.status}</Text>
+              <View style={styles.stageMap}>
+                {TRIP_STAGES.map((stage, index) => {
+                  const completed = currentStageIndex >= index;
+                  const active = currentStageIndex === index;
+                  return (
+                    <View key={stage.key} style={styles.stageItem}>
+                      <View style={styles.stageTrackColumn}>
+                        <View style={[styles.stageDot, completed && styles.stageDotCompleted, active && styles.stageDotActive]} />
+                        {index < TRIP_STAGES.length - 1 ? (
+                          <View style={[styles.stageConnector, currentStageIndex > index && styles.stageConnectorCompleted]} />
+                        ) : null}
+                      </View>
+                      <Text style={[styles.stageLabel, completed && styles.stageLabelCompleted]}>{stage.label}</Text>
+                    </View>
+                  );
+                })}
+              </View>
               <Pressable style={styles.navButton} onPress={() => void quickNavigateCurrent()}>
                 <Text style={styles.navButtonText}>
                   {currentJob.status === 'IN_TRANSIT' ? 'Navigate to Drop' : 'Navigate to Pickup'}
@@ -297,7 +327,13 @@ export function HomeScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.paper },
-  container: { padding: spacing.lg, gap: spacing.md },
+  container: {
+    padding: spacing.lg,
+    gap: spacing.md,
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center'
+  },
   title: { fontFamily: typography.heading, color: colors.accent, fontSize: 30 },
   card: {
     backgroundColor: colors.white,
@@ -389,5 +425,56 @@ const styles = StyleSheet.create({
   mainActionText: {
     fontFamily: typography.bodyBold,
     color: colors.white
+  },
+  stageMap: {
+    marginTop: spacing.xs,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#F8FAFC',
+    padding: spacing.sm,
+    gap: spacing.xs
+  },
+  stageItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs
+  },
+  stageTrackColumn: {
+    alignItems: 'center'
+  },
+  stageDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+    marginTop: 2
+  },
+  stageDotCompleted: {
+    borderColor: colors.secondary,
+    backgroundColor: '#99F6E4'
+  },
+  stageDotActive: {
+    backgroundColor: '#0F766E'
+  },
+  stageConnector: {
+    width: 2,
+    height: 18,
+    backgroundColor: '#CBD5E1',
+    marginTop: 2
+  },
+  stageConnectorCompleted: {
+    backgroundColor: '#0F766E'
+  },
+  stageLabel: {
+    fontFamily: typography.body,
+    color: colors.mutedText,
+    fontSize: 12
+  },
+  stageLabelCompleted: {
+    color: colors.accent,
+    fontFamily: typography.bodyBold
   }
 });

@@ -34,7 +34,7 @@ export function EarningsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.paper },
-  container: { padding: spacing.lg, gap: spacing.md },
+  container: { padding: spacing.lg, gap: spacing.md, width: '100%', maxWidth: 460, alignSelf: 'center' },
   title: { fontFamily: typography.heading, fontSize: 28, color: colors.accent },
   card: {
     backgroundColor: colors.white,

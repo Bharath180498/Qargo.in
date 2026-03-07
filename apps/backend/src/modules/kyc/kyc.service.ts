@@ -15,6 +15,7 @@ import { IdfyProvider } from './providers/idfy.provider';
 import { KycVerificationProvider } from './providers/kyc-verification.provider';
 import { MockIdfyProvider } from './providers/mock-idfy.provider';
 import { CashfreeProvider } from './providers/cashfree.provider';
+import { QuickeKycProvider } from './providers/quickekyc.provider';
 
 @Injectable()
 export class KycService {
@@ -24,6 +25,7 @@ export class KycService {
     private readonly onboardingService: DriverOnboardingService,
     private readonly idfyProvider: IdfyProvider,
     private readonly cashfreeProvider: CashfreeProvider,
+    private readonly quickeKycProvider: QuickeKycProvider,
     private readonly mockProvider: MockIdfyProvider
   ) {}
 
@@ -34,6 +36,9 @@ export class KycService {
     }
     if (mode === 'cashfree') {
       return this.cashfreeProvider;
+    }
+    if (mode === 'quickekyc') {
+      return this.quickeKycProvider;
     }
     return this.mockProvider;
   }
@@ -104,7 +109,16 @@ export class KycService {
       documents: docs.map((doc) => ({
         type: doc.type,
         fileUrl: doc.fileUrl
-      }))
+      })),
+      onboarding: {
+        fullName: onboarding.fullName,
+        aadhaarNumber: onboarding.aadhaarNumber,
+        licenseNumber: onboarding.licenseNumber,
+        rcNumber: onboarding.rcNumber,
+        accountNumber: onboarding.accountNumber,
+        ifscCode: onboarding.ifscCode,
+        upiId: onboarding.upiId
+      }
     });
 
     const verification = await this.prisma.kycVerification.create({

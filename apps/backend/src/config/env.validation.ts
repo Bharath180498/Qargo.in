@@ -74,6 +74,22 @@ class EnvSchema {
 
   @IsOptional()
   @IsString()
+  QUICKEKYC_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  QUICKEKYC_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  QUICKEKYC_API_KEY_HEADER?: string;
+
+  @IsOptional()
+  @IsString()
+  QUICKEKYC_USE_AUTHORIZATION_HEADER?: string;
+
+  @IsOptional()
+  @IsString()
   FCM_SERVER_KEY?: string;
 
   @IsOptional()

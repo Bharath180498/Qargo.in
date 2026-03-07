@@ -32,11 +32,16 @@ export function CustomerPaymentScreen({ navigation }: Props) {
   const setPaymentMethod = useCustomerStore((state) => state.setPaymentMethod);
   const orderId = useCustomerStore((state) => state.activeOrderId);
   const estimatedPrice = useCustomerStore((state) => state.estimatedPrice);
+  const refreshOrder = useCustomerStore((state) => state.refreshOrder);
+  const refreshTimeline = useCustomerStore((state) => state.refreshTimeline);
 
   const [submitting, setSubmitting] = useState(false);
 
   const buttonLabel = useMemo(() => {
     if (orderId && estimatedPrice) {
+      if (selectedMethod === 'CASH') {
+        return 'Confirm Cash on Delivery';
+      }
       if (selectedMethod === 'UPI_SCAN_PAY') {
         return `Pay INR ${estimatedPrice.toFixed(2)} via UPI`;
       }
@@ -87,6 +92,16 @@ export function CustomerPaymentScreen({ navigation }: Props) {
         amount: estimatedPrice
       });
 
+      if (provider === 'WALLET') {
+        Alert.alert(
+          'Cash on Delivery Selected',
+          'Payment will remain pending until handover. Driver will collect cash at delivery.'
+        );
+        await Promise.all([refreshOrder(), refreshTimeline()]);
+        navigation.goBack();
+        return;
+      }
+
       let success = true;
       let providerReference = `PAY_${Date.now()}`;
 
@@ -110,6 +125,7 @@ export function CustomerPaymentScreen({ navigation }: Props) {
         success,
         providerReference
       });
+      await Promise.all([refreshOrder(), refreshTimeline()]);
 
       if (success) {
         Alert.alert('Payment Complete', 'Payment confirmed for this order.');
@@ -181,6 +197,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFF8F1',
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
     paddingHorizontal: 16,
     paddingVertical: 8
   },

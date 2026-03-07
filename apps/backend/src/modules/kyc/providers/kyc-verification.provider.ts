@@ -6,6 +6,16 @@ export interface VerifyKycInput {
     type: KycDocType;
     fileUrl: string;
   }>;
+  onboarding?: {
+    fullName?: string | null;
+    aadhaarNumber?: string | null;
+    licenseNumber?: string | null;
+    rcNumber?: string | null;
+    accountNumber?: string | null;
+    ifscCode?: string | null;
+    upiId?: string | null;
+    dateOfBirth?: string | null;
+  };
 }
 
 export interface VerifyKycResult {
@@ -18,4 +28,3 @@ export interface VerifyKycResult {
 export interface KycVerificationProvider {
   verify(input: VerifyKycInput): Promise<VerifyKycResult>;
 }
-

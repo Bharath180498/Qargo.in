@@ -256,7 +256,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
 
     try {
       await api.post('/driver-onboarding/submit', { userId });
-      await api.post('/kyc/verify/idfy', { userId });
+      await api.post('/kyc/verify/provider', { userId });
 
       await useDriverSessionStore.getState().refreshOnboardingStatus();
       await get().load();

@@ -55,7 +55,7 @@ export class DispatchService {
   }
 
   private get offerExpirySeconds() {
-    return 45;
+    return 120;
   }
 
   private get redis() {
@@ -258,18 +258,11 @@ export class DispatchService {
 
   private async createNextOffer(order: Order, excludedDriverIds: string[]) {
     const candidates = await this.buildCandidates(order);
-    let candidate = candidates.find(
+    const candidate = candidates.find(
       (item) =>
         item.availabilityStatus === AvailabilityStatus.ONLINE &&
         !excludedDriverIds.includes(item.driverId)
     );
-
-    let retriedExcludedDriver = false;
-    if (!candidate && excludedDriverIds.length > 0) {
-      // If every online driver has already seen this order, retry the top online candidate.
-      candidate = candidates.find((item) => item.availabilityStatus === AvailabilityStatus.ONLINE);
-      retriedExcludedDriver = Boolean(candidate);
-    }
 
     if (!candidate) {
       await this.logDecision({
@@ -283,13 +276,11 @@ export class DispatchService {
     return this.createOffer({
       order,
       candidate,
-      mode: retriedExcludedDriver || excludedDriverIds.length > 0 ? 'REASSIGNMENT' : 'NEW_ASSIGNMENT'
+      mode: excludedDriverIds.length > 0 ? 'REASSIGNMENT' : 'NEW_ASSIGNMENT'
     });
   }
 
   async assignOrder(orderId: string) {
-    await this.processExpiredOffers();
-
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) {
       throw new NotFoundException('Order not found');
@@ -328,7 +319,13 @@ export class DispatchService {
       };
     }
 
-    const offer = await this.createNextOffer(order, []);
+    const historicalOffers = await this.prisma.tripOffer.findMany({
+      where: { orderId: order.id },
+      select: { driverId: true }
+    });
+    const triedDriverIds = [...new Set(historicalOffers.map((entry) => entry.driverId))];
+
+    const offer = await this.createNextOffer(order, triedDriverIds);
     if (!offer) {
       return {
         orderId: order.id,
@@ -860,8 +857,6 @@ export class DispatchService {
   }
 
   async getDriverPendingOffers(driverId: string) {
-    await this.processExpiredOffers();
-
     const pending = await this.prisma.tripOffer.findMany({
       where: {
         driverId,

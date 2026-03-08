@@ -3,6 +3,16 @@ import type { VehicleType } from '@porter/shared';
 import api from '../services/api';
 import { useDriverSessionStore } from './useDriverSessionStore';
 
+export interface DriverPaymentMethod {
+  id: string;
+  type: 'UPI_QR' | 'UPI_VPA';
+  label?: string;
+  upiId: string;
+  qrImageUrl?: string;
+  isPreferred: boolean;
+  isActive: boolean;
+}
+
 interface OnboardingState {
   status?: string;
   fullName: string;
@@ -19,15 +29,25 @@ interface OnboardingState {
   accountNumber: string;
   ifscCode: string;
   upiId: string;
-  upiQrImageUrl: string;
+  paymentMethods: DriverPaymentMethod[];
   uploadedDocs: string[];
   loading: boolean;
   error?: string;
   load: () => Promise<void>;
   updateProfile: (payload: Partial<Pick<OnboardingState, 'fullName' | 'phone' | 'email' | 'city'>>) => Promise<void>;
   updateVehicle: (payload: Partial<Pick<OnboardingState, 'vehicleType' | 'vehicleNumber' | 'licenseNumber' | 'aadhaarNumber' | 'rcNumber'>>) => Promise<void>;
-  updateBank: (payload: Partial<Pick<OnboardingState, 'accountHolderName' | 'bankName' | 'accountNumber' | 'ifscCode' | 'upiId' | 'upiQrImageUrl'>>) => Promise<void>;
+  updateBank: (payload: Partial<Pick<OnboardingState, 'accountHolderName' | 'bankName' | 'accountNumber' | 'ifscCode' | 'upiId'>>) => Promise<void>;
   uploadDoc: (type: string) => Promise<void>;
+  uploadPaymentMethodQr: (payload: {
+    fileUri: string;
+    fileName?: string;
+    contentType?: string;
+    upiId?: string;
+    label?: string;
+    isPreferred?: boolean;
+  }) => Promise<void>;
+  setPreferredPaymentMethod: (methodId: string) => Promise<void>;
+  removePaymentMethod: (methodId: string) => Promise<void>;
   submit: () => Promise<void>;
 }
 
@@ -46,7 +66,7 @@ const defaultState = {
   accountNumber: '',
   ifscCode: '',
   upiId: '',
-  upiQrImageUrl: '',
+  paymentMethods: [] as DriverPaymentMethod[],
   uploadedDocs: []
 };
 
@@ -95,6 +115,48 @@ function extractErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function normalizePaymentMethods(input: unknown): DriverPaymentMethod[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return input
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+
+      const candidate = entry as Record<string, unknown>;
+      const id = typeof candidate.id === 'string' ? candidate.id : '';
+      const upiId = typeof candidate.upiId === 'string' ? candidate.upiId : '';
+      if (!id || !upiId) {
+        return null;
+      }
+
+      return {
+        id,
+        type: (typeof candidate.type === 'string' ? candidate.type : 'UPI_QR') as 'UPI_QR' | 'UPI_VPA',
+        label: typeof candidate.label === 'string' && candidate.label.trim() ? candidate.label.trim() : undefined,
+        upiId,
+        qrImageUrl:
+          typeof candidate.qrImageUrl === 'string' && candidate.qrImageUrl.trim()
+            ? candidate.qrImageUrl.trim()
+            : undefined,
+        isPreferred: Boolean(candidate.isPreferred),
+        isActive: Boolean(candidate.isActive ?? true)
+      } satisfies DriverPaymentMethod;
+    })
+    .filter(Boolean) as DriverPaymentMethod[];
+}
+
+function buildFileNameFromUri(uri: string, fallbackExtension = 'jpg') {
+  const raw = uri.split('/').pop() ?? '';
+  if (!raw || !raw.includes('.')) {
+    return `qr-${Date.now()}.${fallbackExtension}`;
+  }
+  return raw.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
 export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   ...defaultState,
   loading: false,
@@ -128,7 +190,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
         accountNumber: String(onboarding.accountNumber ?? ''),
         ifscCode: String(onboarding.ifscCode ?? ''),
         upiId: String(onboarding.upiId ?? ''),
-        upiQrImageUrl: String(onboarding.upiQrImageUrl ?? ''),
+        paymentMethods: normalizePaymentMethods(onboarding.paymentMethods),
         uploadedDocs: docs.map((doc) => doc.type),
         error: undefined
       });
@@ -204,11 +266,19 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
         bankName: next.bankName,
         accountNumber: next.accountNumber,
         ifscCode: next.ifscCode,
-        upiId: next.upiId,
-        upiQrImageUrl: next.upiQrImageUrl || undefined
+        upiId: next.upiId
       });
 
-      set({ ...payload, loading: false, error: undefined });
+      const methodsResponse = await api.get('/driver-onboarding/payment-methods', {
+        params: { userId }
+      });
+
+      set({
+        ...payload,
+        paymentMethods: normalizePaymentMethods(methodsResponse.data),
+        loading: false,
+        error: undefined
+      });
     } catch (error: unknown) {
       set({
         loading: false,
@@ -250,6 +320,106 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       set({
         loading: false,
         error: extractErrorMessage(error, 'Document upload failed')
+      });
+      throw error;
+    }
+  },
+  async uploadPaymentMethodQr(payload) {
+    const userId = currentUserId();
+    const storeUpiId = get().upiId;
+    const normalizedUpi = (payload.upiId ?? storeUpiId).trim().toLowerCase();
+    const upiPattern = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/i;
+
+    if (!normalizedUpi || !upiPattern.test(normalizedUpi)) {
+      throw new Error('Set a valid UPI ID before uploading QR code.');
+    }
+
+    set({ loading: true, error: undefined });
+
+    try {
+      const fileName = payload.fileName?.trim() || buildFileNameFromUri(payload.fileUri, 'jpg');
+      const requestedContentType = payload.contentType?.trim() || 'image/jpeg';
+      const upload = await api.post('/driver-onboarding/payment-methods/upload-url', {
+        userId,
+        fileName,
+        contentType: requestedContentType
+      });
+
+      const uploadUrl = String(upload.data?.uploadUrl ?? '');
+      const fileUrl = String(upload.data?.fileUrl ?? '');
+      const resolvedContentType = String(upload.data?.contentType ?? requestedContentType);
+
+      if (!fileUrl) {
+        throw new Error('Upload URL unavailable');
+      }
+
+      if (uploadUrl && !uploadUrl.startsWith('mock://')) {
+        const fileResponse = await fetch(payload.fileUri);
+        const blob = await fileResponse.blob();
+        const putResponse = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': resolvedContentType
+          },
+          body: blob
+        });
+
+        if (!putResponse.ok) {
+          throw new Error('Could not upload QR image');
+        }
+      }
+
+      await api.post('/driver-onboarding/payment-methods', {
+        userId,
+        type: 'UPI_QR',
+        label: payload.label?.trim() || undefined,
+        upiId: normalizedUpi,
+        qrImageUrl: fileUrl,
+        isPreferred: payload.isPreferred
+      });
+
+      await get().load();
+      set({ loading: false, error: undefined });
+    } catch (error: unknown) {
+      set({
+        loading: false,
+        error: extractErrorMessage(error, 'QR upload failed')
+      });
+      throw error;
+    }
+  },
+  async setPreferredPaymentMethod(methodId) {
+    const userId = currentUserId();
+    set({ loading: true, error: undefined });
+
+    try {
+      await api.post(`/driver-onboarding/payment-methods/${methodId}/preferred`, {
+        userId
+      });
+      await get().load();
+      set({ loading: false, error: undefined });
+    } catch (error: unknown) {
+      set({
+        loading: false,
+        error: extractErrorMessage(error, 'Could not set preferred payment method')
+      });
+      throw error;
+    }
+  },
+  async removePaymentMethod(methodId) {
+    const userId = currentUserId();
+    set({ loading: true, error: undefined });
+
+    try {
+      await api.delete(`/driver-onboarding/payment-methods/${methodId}`, {
+        params: { userId }
+      });
+      await get().load();
+      set({ loading: false, error: undefined });
+    } catch (error: unknown) {
+      set({
+        loading: false,
+        error: extractErrorMessage(error, 'Could not remove payment method')
       });
       throw error;
     }

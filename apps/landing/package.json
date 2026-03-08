@@ -1,0 +1,22 @@
+{
+  "name": "@porter/landing",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "unset npm_config_workspace npm_config_workspaces && NEXT_TELEMETRY_DISABLED=1 NEXT_IGNORE_INCORRECT_LOCKFILE=1 next dev",
+    "build": "unset npm_config_workspace npm_config_workspaces && NEXT_TELEMETRY_DISABLED=1 NEXT_IGNORE_INCORRECT_LOCKFILE=1 next build",
+    "start": "unset npm_config_workspace npm_config_workspaces && NEXT_TELEMETRY_DISABLED=1 NEXT_IGNORE_INCORRECT_LOCKFILE=1 next start",
+    "lint": "echo 'lint not configured for landing yet'"
+  },
+  "dependencies": {
+    "next": "14.2.21",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "typescript": "^5.6.3"
+  }
+}

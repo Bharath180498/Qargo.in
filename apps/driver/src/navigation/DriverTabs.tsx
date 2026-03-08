@@ -8,6 +8,8 @@ import { HistoryScreen } from '../screens/tabs/HistoryScreen';
 import { ProfileScreen } from '../screens/tabs/ProfileScreen';
 import { colors, typography } from '../theme';
 import { useDriverAppStore } from '../store/useDriverAppStore';
+import { useDriverUxStore } from '../store/useDriverUxStore';
+import { SupportFab } from '../components/SupportFab';
 
 const Tab = createBottomTabNavigator<DriverTabParamList>();
 
@@ -19,6 +21,7 @@ export function DriverTabs() {
   const currentTopOfferId = pendingOffers[0]?.id as string | undefined;
   const lastSeenOfferId = useRef<string | undefined>(undefined);
   const isOfferTrackerReady = useRef(false);
+  const simpleMode = useDriverUxStore((state) => state.simpleMode);
 
   useEffect(() => {
     void bootstrap();
@@ -54,26 +57,29 @@ export function DriverTabs() {
   }, [currentTopOfferId]);
 
   return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.mutedText,
-        tabBarStyle: {
-          borderTopWidth: 1,
-          borderTopColor: '#FAD4B4',
-          backgroundColor: '#FFF8F1'
-        },
-        tabBarLabelStyle: {
-          fontFamily: typography.body,
-          fontSize: 12
-        }
-      }}
-    >
-      <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="Earnings" component={EarningsScreen} />
-      <Tab.Screen name="History" component={HistoryScreen} />
-      <Tab.Screen name="Profile" component={ProfileScreen} />
-    </Tab.Navigator>
+    <>
+      <Tab.Navigator
+        screenOptions={{
+          headerShown: false,
+          tabBarActiveTintColor: colors.primary,
+          tabBarInactiveTintColor: colors.mutedText,
+          tabBarStyle: {
+            borderTopWidth: 1,
+            borderTopColor: '#FAD4B4',
+            backgroundColor: '#FFF8F1'
+          },
+          tabBarLabelStyle: {
+            fontFamily: typography.body,
+            fontSize: 12
+          }
+        }}
+      >
+        <Tab.Screen name="Home" component={HomeScreen} />
+        <Tab.Screen name="Earnings" component={EarningsScreen} />
+        {!simpleMode ? <Tab.Screen name="History" component={HistoryScreen} /> : null}
+        <Tab.Screen name="Profile" component={ProfileScreen} />
+      </Tab.Navigator>
+      <SupportFab />
+    </>
   );
 }

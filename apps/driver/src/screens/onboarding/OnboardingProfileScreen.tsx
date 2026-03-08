@@ -13,6 +13,7 @@ import type { OnboardingStackParamList } from '../../types';
 import { useOnboardingStore } from '../../store/useOnboardingStore';
 import { AnimatedTextField } from '../../components/AnimatedTextField';
 import { FormScreen } from '../../components/FormScreen';
+import { OnboardingCoachBanner } from '../../components/OnboardingCoachBanner';
 
 type Props = NativeStackScreenProps<OnboardingStackParamList, 'OnboardingProfile'>;
 
@@ -71,6 +72,7 @@ export function OnboardingProfileScreen({ navigation }: Props) {
   return (
     <FormScreen>
       <View style={styles.container}>
+        <OnboardingCoachBanner step={1} total={5} tipKey="onboarding.help.profile" />
         <Text style={styles.title}>Onboarding: Profile</Text>
         <View style={styles.card}>
           <AnimatedTextField

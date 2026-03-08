@@ -10,6 +10,7 @@ import {
 import { colors, radius, spacing, typography } from '../../theme';
 import { useDriverSessionStore } from '../../store/useDriverSessionStore';
 import { useOnboardingStore } from '../../store/useOnboardingStore';
+import { OnboardingCoachBanner } from '../../components/OnboardingCoachBanner';
 
 export function OnboardingStatusScreen() {
   const sessionRefresh = useDriverSessionStore((state) => state.refreshOnboardingStatus);
@@ -24,6 +25,7 @@ export function OnboardingStatusScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
+        <OnboardingCoachBanner step={5} total={5} tipKey="onboarding.help.status" />
         <Text style={styles.title}>KYC Verification Status</Text>
         <View style={styles.card}>
           <Text style={styles.label}>Current Status</Text>

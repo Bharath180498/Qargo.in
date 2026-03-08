@@ -23,4 +23,8 @@ export class CreatePaymentDto {
   @IsOptional()
   @IsString()
   directUpiName?: string;
+
+  @IsOptional()
+  @IsString()
+  driverPaymentMethodId?: string;
 }

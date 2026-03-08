@@ -1,5 +1,7 @@
 import {
   AvailabilityStatus,
+  DriverSubscriptionPlan,
+  DriverSubscriptionStatus,
   DriverProfile,
   Prisma,
   TripOfferStatus,
@@ -16,6 +18,13 @@ import { DriverEarningsQueryDto } from './dto/driver-earnings-query.dto';
 
 const ONLINE_GEO_KEY = 'drivers:online';
 const BUSY_GEO_KEY = 'drivers:busy';
+const DRIVER_TRIAL_DAYS = 90;
+
+const SUBSCRIPTION_MONTHLY_FEE: Record<DriverSubscriptionPlan, number | null> = {
+  [DriverSubscriptionPlan.GO]: 500,
+  [DriverSubscriptionPlan.PRO]: 1000,
+  [DriverSubscriptionPlan.ENTERPRISE]: null
+};
 
 @Injectable()
 export class DriversService implements OnModuleInit {
@@ -338,6 +347,40 @@ export class DriversService implements OnModuleInit {
     });
   }
 
+  private resolveTrialEndsAt(driver: Pick<DriverProfile, 'createdAt' | 'trialEndsAt'>) {
+    if (driver.trialEndsAt) {
+      return driver.trialEndsAt;
+    }
+
+    const trialEndsAt = new Date(driver.createdAt);
+    trialEndsAt.setDate(trialEndsAt.getDate() + DRIVER_TRIAL_DAYS);
+    return trialEndsAt;
+  }
+
+  async updateSubscriptionPlan(driverId: string, plan: DriverSubscriptionPlan) {
+    const driver = await this.prisma.driverProfile.findUnique({ where: { id: driverId } });
+    if (!driver) {
+      throw new NotFoundException('Driver not found');
+    }
+
+    const trialEndsAt = this.resolveTrialEndsAt(driver);
+    const updated = await this.prisma.driverProfile.update({
+      where: { id: driverId },
+      data: {
+        subscriptionPlan: plan,
+        subscriptionStatus: DriverSubscriptionStatus.ACTIVE,
+        trialEndsAt
+      }
+    });
+
+    return {
+      driverId: updated.id,
+      plan: updated.subscriptionPlan,
+      status: updated.subscriptionStatus,
+      trialEndsAt: updated.trialEndsAt
+    };
+  }
+
   async earnings(driverId: string, query: DriverEarningsQueryDto) {
     const driver = await this.prisma.driverProfile.findUnique({ where: { id: driverId } });
     if (!driver) {
@@ -366,8 +409,8 @@ export class DriversService implements OnModuleInit {
       (acc, trip) => {
         const fare = Number(trip.order.finalPrice ?? trip.order.estimatedPrice);
         const waiting = Number(trip.waitingCharge);
-        const commission = Number((fare * 0.2).toFixed(2));
-        const payout = Number((fare - commission).toFixed(2));
+        const commission = 0;
+        const payout = Number((fare + waiting).toFixed(2));
 
         acc.grossFare += fare;
         acc.waitingCharges += waiting;
@@ -383,15 +426,46 @@ export class DriversService implements OnModuleInit {
       }
     );
 
+    const now = new Date();
+    const trialEndsAt = this.resolveTrialEndsAt(driver);
+    const trialActive = now.getTime() <= trialEndsAt.getTime();
+    const daysLeft = trialActive
+      ? Math.max(0, Math.ceil((trialEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)))
+      : 0;
+    const monthlyFee = SUBSCRIPTION_MONTHLY_FEE[driver.subscriptionPlan];
+    const includesToday = from.getTime() <= now.getTime() && to.getTime() >= now.getTime();
+    const subscriptionFeeInRange = !trialActive && includesToday && monthlyFee ? monthlyFee : 0;
+    const roundedSummary = {
+      grossFare: Number(summary.grossFare.toFixed(2)),
+      waitingCharges: Number(summary.waitingCharges.toFixed(2)),
+      commission: Number(summary.commission.toFixed(2)),
+      subscriptionFee: Number(subscriptionFeeInRange.toFixed(2)),
+      netPayout: Number(summary.netPayout.toFixed(2)),
+      takeHomeAfterSubscription: Number((summary.netPayout - subscriptionFeeInRange).toFixed(2))
+    };
+
     return {
       driverId,
       from,
       to,
       tripCount: completedTrips.length,
       currency: 'INR',
-      summary: Object.fromEntries(
-        Object.entries(summary).map(([key, value]) => [key, Number(value.toFixed(2))])
-      ),
+      summary: roundedSummary,
+      subscription: {
+        plan: driver.subscriptionPlan,
+        status: driver.subscriptionStatus,
+        monthlyFeeInr: monthlyFee,
+        trial: {
+          isActive: trialActive,
+          endsAt: trialEndsAt,
+          daysLeft
+        },
+        note: trialActive
+          ? `Trial active: drivers keep 100% ride earnings for first ${DRIVER_TRIAL_DAYS} days.`
+          : driver.subscriptionPlan === DriverSubscriptionPlan.ENTERPRISE
+            ? 'Enterprise plan billing is managed by sales contracts.'
+            : `Monthly subscription fee: INR ${monthlyFee ?? 0}.`
+      },
       recentTrips: completedTrips.slice(0, 20).map((trip) => ({
         tripId: trip.id,
         orderId: trip.orderId,

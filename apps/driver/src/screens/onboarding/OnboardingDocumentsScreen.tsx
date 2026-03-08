@@ -13,6 +13,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, radius, spacing, typography } from '../../theme';
 import type { OnboardingStackParamList } from '../../types';
 import { useOnboardingStore } from '../../store/useOnboardingStore';
+import { OnboardingCoachBanner } from '../../components/OnboardingCoachBanner';
 
 type Props = NativeStackScreenProps<OnboardingStackParamList, 'OnboardingDocuments'>;
 
@@ -38,6 +39,7 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
   const accountNumber = useOnboardingStore((state) => state.accountNumber);
   const ifscCode = useOnboardingStore((state) => state.ifscCode);
   const upiId = useOnboardingStore((state) => state.upiId);
+  const paymentMethods = useOnboardingStore((state) => state.paymentMethods);
   const error = useOnboardingStore((state) => state.error);
 
   useEffect(() => {
@@ -108,6 +110,11 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
       return;
     }
 
+    if (paymentMethods.length === 0) {
+      Alert.alert('Add QR payment', 'Upload at least one UPI QR in the payout step.');
+      return;
+    }
+
     try {
       await submit();
       navigation.navigate('OnboardingStatus');
@@ -125,6 +132,7 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
+        <OnboardingCoachBanner step={4} total={5} tipKey="onboarding.help.docs" />
         <Text style={styles.title}>Onboarding: Documents</Text>
         <Text style={styles.subtitle}>Upload required KYC docs to submit verification.</Text>
 
@@ -160,6 +168,9 @@ export function OnboardingDocumentsScreen({ navigation }: Props) {
           <Text style={styles.hint}>
             Complete before submit: {missingOnboardingFields.join(', ')}
           </Text>
+        ) : null}
+        {paymentMethods.length === 0 ? (
+          <Text style={styles.hint}>Upload at least one UPI QR in payout setup.</Text>
         ) : null}
         {error ? <Text style={styles.error}>{error}</Text> : null}
       </ScrollView>

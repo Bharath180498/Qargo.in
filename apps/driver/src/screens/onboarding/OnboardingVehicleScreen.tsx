@@ -14,6 +14,7 @@ import type { OnboardingStackParamList } from '../../types';
 import { useOnboardingStore } from '../../store/useOnboardingStore';
 import { AnimatedTextField } from '../../components/AnimatedTextField';
 import { FormScreen } from '../../components/FormScreen';
+import { OnboardingCoachBanner } from '../../components/OnboardingCoachBanner';
 
 type Props = NativeStackScreenProps<OnboardingStackParamList, 'OnboardingVehicle'>;
 
@@ -85,6 +86,7 @@ export function OnboardingVehicleScreen({ navigation }: Props) {
   return (
     <FormScreen>
       <View style={styles.container}>
+        <OnboardingCoachBanner step={2} total={5} tipKey="onboarding.help.vehicle" />
         <Text style={styles.title}>Onboarding: Vehicle</Text>
         <View style={styles.card}>
           <Text style={styles.label}>Vehicle Type</Text>

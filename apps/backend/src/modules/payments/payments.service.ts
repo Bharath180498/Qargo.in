@@ -191,7 +191,11 @@ export class PaymentsService {
             driver: {
               include: {
                 user: true,
-                payoutAccount: true
+                payoutAccount: true,
+                paymentMethods: {
+                  where: { isActive: true },
+                  orderBy: [{ isPreferred: 'desc' }, { updatedAt: 'desc' }]
+                }
               }
             }
           }
@@ -254,12 +258,26 @@ export class PaymentsService {
     }
 
     if (payload.provider === PaymentProvider.UPI) {
-      const driverPayeeVpa = order.trip?.driver?.payoutAccount?.upiId?.trim();
-      const directPayeeVpa = payload.directUpiVpa?.trim() || (payload.directPayToDriver ? driverPayeeVpa : '');
+      const driverPaymentMethods = order.trip?.driver?.paymentMethods ?? [];
+      const selectedDriverMethod = payload.driverPaymentMethodId
+        ? driverPaymentMethods.find((method) => method.id === payload.driverPaymentMethodId)
+        : undefined;
+      const preferredDriverMethod =
+        selectedDriverMethod ??
+        driverPaymentMethods.find((method) => method.isPreferred) ??
+        driverPaymentMethods[0];
+
+      const driverPayeeVpa =
+        preferredDriverMethod?.upiId?.trim() ??
+        order.trip?.driver?.payoutAccount?.upiId?.trim();
+      const directPayeeVpa =
+        payload.directUpiVpa?.trim() || (payload.directPayToDriver ? driverPayeeVpa : '');
       const resolvedPayeeVpa = directPayeeVpa || this.upiPayeeVpa || 'qargo.demo@upi';
       const resolvedPayeeName =
         payload.directUpiName?.trim() ||
-        (payload.directPayToDriver ? order.trip?.driver?.user?.name?.trim() : '') ||
+        (payload.directPayToDriver
+          ? preferredDriverMethod?.label?.trim() || order.trip?.driver?.user?.name?.trim()
+          : '') ||
         this.upiPayeeName;
       const isDirectToDriver = Boolean(payload.directPayToDriver && directPayeeVpa);
       const upiIntentUrl = this.buildUpiIntent(payment.id, Number(payment.amount), {
@@ -284,7 +302,9 @@ export class PaymentsService {
         payee: {
           vpa: resolvedPayeeVpa,
           name: resolvedPayeeName,
-          directToDriver: isDirectToDriver
+          directToDriver: isDirectToDriver,
+          paymentMethodId: preferredDriverMethod?.id,
+          qrImageUrl: preferredDriverMethod?.qrImageUrl ?? undefined
         },
         ...breakdown
       };

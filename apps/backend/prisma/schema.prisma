@@ -131,6 +131,23 @@ enum VehicleMatchType {
   UPGRADE
 }
 
+enum DriverPaymentMethodType {
+  UPI_QR
+  UPI_VPA
+}
+
+enum DriverSubscriptionPlan {
+  GO
+  PRO
+  ENTERPRISE
+}
+
+enum DriverSubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+}
+
 model User {
   id           String         @id @default(uuid())
   name         String
@@ -150,6 +167,7 @@ model User {
   kycDocuments   KycDocument[]
   kycVerifications KycVerification[]
   reviewedKycVerifications KycVerification[] @relation("KycReviewedByAdmin")
+  driverPaymentMethods DriverPaymentMethod[]
 }
 
 model DriverProfile {
@@ -159,6 +177,9 @@ model DriverProfile {
   vehicleNumber      String             @unique
   licenseNumber      String             @unique
   aadhaarNumber      String?
+  subscriptionPlan   DriverSubscriptionPlan   @default(GO)
+  subscriptionStatus DriverSubscriptionStatus @default(ACTIVE)
+  trialEndsAt        DateTime?
   verificationStatus VerificationStatus @default(PENDING)
   availabilityStatus AvailabilityStatus @default(OFFLINE)
   currentLat         Float?
@@ -174,6 +195,7 @@ model DriverProfile {
   queuedTrips        Trip[]             @relation("QueuedDriverTrips")
   pushTokens         DriverPushToken[]
   payoutAccount      DriverPayoutAccount?
+  paymentMethods     DriverPaymentMethod[]
   tripOffers         TripOffer[]
   kycDocuments       KycDocument[]
 
@@ -408,6 +430,26 @@ model DriverPayoutAccount {
   updatedAt         DateTime    @updatedAt
 
   driver            DriverProfile @relation(fields: [driverId], references: [id])
+}
+
+model DriverPaymentMethod {
+  id          String                  @id @default(uuid())
+  userId      String
+  driverId    String?
+  type        DriverPaymentMethodType @default(UPI_QR)
+  label       String?
+  upiId       String
+  qrImageUrl  String?
+  isPreferred Boolean                 @default(false)
+  isActive    Boolean                 @default(true)
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  user        User                    @relation(fields: [userId], references: [id])
+  driver      DriverProfile?          @relation(fields: [driverId], references: [id])
+
+  @@index([userId, isActive, isPreferred])
+  @@index([driverId, isActive, isPreferred])
 }
 
 model DriverPushToken {

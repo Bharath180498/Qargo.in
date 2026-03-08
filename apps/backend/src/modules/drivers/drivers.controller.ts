@@ -3,6 +3,7 @@ import { DriversService } from './drivers.service';
 import { UpdateDriverLocationDto } from './dto/update-driver-location.dto';
 import { SetDriverAvailabilityDto } from './dto/set-driver-availability.dto';
 import { DriverEarningsQueryDto } from './dto/driver-earnings-query.dto';
+import { UpdateDriverSubscriptionDto } from './dto/update-driver-subscription.dto';
 
 @Controller('drivers')
 export class DriversController {
@@ -46,6 +47,14 @@ export class DriversController {
   @Get(':driverId/earnings')
   earnings(@Param('driverId') driverId: string, @Query() query: DriverEarningsQueryDto) {
     return this.driversService.earnings(driverId, query);
+  }
+
+  @Post(':driverId/subscription')
+  updateSubscription(
+    @Param('driverId') driverId: string,
+    @Body() payload: UpdateDriverSubscriptionDto
+  ) {
+    return this.driversService.updateSubscriptionPlan(driverId, payload.plan);
   }
 
   @Get('admin/pending-approvals')

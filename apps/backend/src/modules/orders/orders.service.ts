@@ -233,6 +233,10 @@ export class OrdersService {
                 user: true,
                 vehicles: true,
                 payoutAccount: true,
+                paymentMethods: {
+                  where: { isActive: true },
+                  orderBy: [{ isPreferred: 'desc' }, { updatedAt: 'desc' }]
+                },
                 _count: {
                   select: {
                     trips: true

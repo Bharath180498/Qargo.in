@@ -13,10 +13,13 @@ import type { AuthStackParamList } from '../../types';
 import { useDriverSessionStore } from '../../store/useDriverSessionStore';
 import { AnimatedTextField } from '../../components/AnimatedTextField';
 import { FormScreen } from '../../components/FormScreen';
+import { useDriverI18n } from '../../i18n/useDriverI18n';
+import { LanguageSwitcher } from '../../components/LanguageSwitcher';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'DriverOtp'>;
 
 export function DriverOtpScreen({ route }: Props) {
+  const { t } = useDriverI18n();
   const requestOtp = useDriverSessionStore((state) => state.requestOtp);
   const verifyOtp = useDriverSessionStore((state) => state.verifyOtp);
   const loading = useDriverSessionStore((state) => state.loading);
@@ -54,8 +57,9 @@ export function DriverOtpScreen({ route }: Props) {
   return (
     <FormScreen>
       <View style={styles.container}>
-        <Text style={styles.title}>Verify OTP</Text>
-        <Text style={styles.subtitle}>Sent to {route.params.phone}</Text>
+        <Text style={styles.title}>{t('auth.verifyTitle')}</Text>
+        <Text style={styles.subtitle}>{t('auth.verifySubtitle', { phone: route.params.phone })}</Text>
+        <LanguageSwitcher />
 
         <View style={styles.card}>
           <AnimatedTextField
@@ -68,11 +72,15 @@ export function DriverOtpScreen({ route }: Props) {
           />
 
           <Pressable style={styles.button} onPress={() => void verify()} disabled={loading}>
-            {loading ? <ActivityIndicator color={colors.white} /> : <Text style={styles.buttonText}>Verify & Continue</Text>}
+            {loading ? (
+              <ActivityIndicator color={colors.white} />
+            ) : (
+              <Text style={styles.buttonText}>Verify & Continue</Text>
+            )}
           </Pressable>
 
           <Pressable style={styles.linkButton} onPress={() => void resend()} disabled={loading}>
-            <Text style={styles.linkText}>Resend OTP</Text>
+            <Text style={styles.linkText}>{t('auth.resendOtp')}</Text>
           </Pressable>
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}

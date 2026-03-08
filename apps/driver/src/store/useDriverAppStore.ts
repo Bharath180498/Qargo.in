@@ -10,7 +10,20 @@ interface DriverEarnings {
     grossFare: number;
     waitingCharges: number;
     commission: number;
+    subscriptionFee?: number;
     netPayout: number;
+    takeHomeAfterSubscription?: number;
+  };
+  subscription?: {
+    plan: 'GO' | 'PRO' | 'ENTERPRISE';
+    status: 'ACTIVE' | 'PAST_DUE' | 'CANCELLED';
+    monthlyFeeInr: number | null;
+    trial: {
+      isActive: boolean;
+      endsAt: string;
+      daysLeft: number;
+    };
+    note: string;
   };
   recentTrips: Array<{
     tripId: string;
@@ -32,6 +45,7 @@ interface DriverAppState {
   bootstrap: () => Promise<void>;
   refreshJobs: () => Promise<void>;
   refreshEarnings: () => Promise<void>;
+  setSubscriptionPlan: (plan: 'GO' | 'PRO' | 'ENTERPRISE') => Promise<void>;
   setAvailability: (next: 'ONLINE' | 'OFFLINE') => Promise<void>;
   updateLocation: (lat: number, lng: number, orderId?: string) => Promise<void>;
   acceptOffer: (offerId: string) => Promise<void>;
@@ -164,6 +178,15 @@ export const useDriverAppStore = create<DriverAppState>((set, get) => ({
 
     const response = await api.get(`/drivers/${driverProfileId}/earnings`);
     set({ earnings: response.data });
+  },
+  async setSubscriptionPlan(plan) {
+    const driverProfileId = get().driverProfileId;
+    if (!driverProfileId) {
+      return;
+    }
+
+    await api.post(`/drivers/${driverProfileId}/subscription`, { plan });
+    await get().refreshEarnings();
   },
   async setAvailability(next) {
     const driverProfileId = get().driverProfileId;

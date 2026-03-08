@@ -13,10 +13,13 @@ import type { AuthStackParamList } from '../../types';
 import { useDriverSessionStore } from '../../store/useDriverSessionStore';
 import { AnimatedTextField } from '../../components/AnimatedTextField';
 import { FormScreen } from '../../components/FormScreen';
+import { useDriverI18n } from '../../i18n/useDriverI18n';
+import { LanguageSwitcher } from '../../components/LanguageSwitcher';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'DriverPhone'>;
 
 export function DriverPhoneScreen({ navigation }: Props) {
+  const { t } = useDriverI18n();
   const requestOtp = useDriverSessionStore((state) => state.requestOtp);
   const loading = useDriverSessionStore((state) => state.loading);
   const error = useDriverSessionStore((state) => state.error);
@@ -46,19 +49,20 @@ export function DriverPhoneScreen({ navigation }: Props) {
   return (
     <FormScreen>
       <View style={styles.container}>
-        <Text style={styles.title}>Drive with Qargo</Text>
-        <Text style={styles.subtitle}>Sign in to manage jobs, queue offers, and earnings.</Text>
+        <Text style={styles.title}>{t('auth.title')}</Text>
+        <Text style={styles.subtitle}>{t('auth.subtitle')}</Text>
+        <LanguageSwitcher />
 
         <View style={styles.formCard}>
           <AnimatedTextField
-            label="Full name"
+            label={t('auth.name')}
             value={name}
             onChangeText={setName}
             placeholder="Your name"
             returnKeyType="next"
           />
           <AnimatedTextField
-            label="Phone number"
+            label={t('auth.phone')}
             value={phone}
             onChangeText={setPhone}
             placeholder="+919000000101"
@@ -68,7 +72,11 @@ export function DriverPhoneScreen({ navigation }: Props) {
           />
 
           <Pressable style={styles.button} onPress={() => void continueToOtp()} disabled={loading}>
-            {loading ? <ActivityIndicator color={colors.white} /> : <Text style={styles.buttonText}>Send OTP</Text>}
+            {loading ? (
+              <ActivityIndicator color={colors.white} />
+            ) : (
+              <Text style={styles.buttonText}>{t('auth.sendOtp')}</Text>
+            )}
           </Pressable>
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}

@@ -35,6 +35,14 @@ interface DriverDirectPaymentProfile {
   name?: string;
   upiId?: string;
   upiQrImageUrl?: string;
+  paymentMethodId?: string;
+  paymentMethods: Array<{
+    id: string;
+    label?: string;
+    upiId: string;
+    qrImageUrl?: string;
+    isPreferred: boolean;
+  }>;
 }
 
 function normalize(value: unknown) {
@@ -50,8 +58,11 @@ export function CustomerPaymentScreen({ navigation }: Props) {
   const refreshTimeline = useCustomerStore((state) => state.refreshTimeline);
 
   const [submitting, setSubmitting] = useState(false);
-  const [driverDirectProfile, setDriverDirectProfile] = useState<DriverDirectPaymentProfile>({});
+  const [driverDirectProfile, setDriverDirectProfile] = useState<DriverDirectPaymentProfile>({
+    paymentMethods: []
+  });
   const [loadingDriverProfile, setLoadingDriverProfile] = useState(false);
+  const [selectedDriverPaymentMethodId, setSelectedDriverPaymentMethodId] = useState<string>();
   const baseAmount = Number(estimatedPrice ?? 0);
   const isCardMethod = CARD_METHODS.includes(selectedMethod);
   const cardSurchargeAmount = isCardMethod ? Math.round(baseAmount * 0.025 * 100) / 100 : 0;
@@ -62,7 +73,8 @@ export function CustomerPaymentScreen({ navigation }: Props) {
 
     const loadOrderPaymentProfile = async () => {
       if (!orderId) {
-        setDriverDirectProfile({});
+        setDriverDirectProfile({ paymentMethods: [] });
+        setSelectedDriverPaymentMethodId(undefined);
         return;
       }
 
@@ -83,18 +95,57 @@ export function CustomerPaymentScreen({ navigation }: Props) {
                 upiId?: string;
                 upiQrImageUrl?: string;
               };
+              paymentMethods?: Array<{
+                id?: string;
+                label?: string;
+                upiId?: string;
+                qrImageUrl?: string;
+                isPreferred?: boolean;
+              }>;
             };
           };
         };
 
+        const paymentMethods = Array.isArray(payload.trip?.driver?.paymentMethods)
+          ? payload.trip?.driver?.paymentMethods
+              .map((method) => {
+                const id = normalize(method.id);
+                const upiId = normalize(method.upiId);
+                if (!id || !upiId) {
+                  return null;
+                }
+                return {
+                  id,
+                  label: normalize(method.label),
+                  upiId,
+                  qrImageUrl: normalize(method.qrImageUrl),
+                  isPreferred: Boolean(method.isPreferred)
+                };
+              })
+              .filter(Boolean) as Array<{
+              id: string;
+              label?: string;
+              upiId: string;
+              qrImageUrl?: string;
+              isPreferred: boolean;
+            }>
+          : [];
+
+        const preferredMethod = paymentMethods.find((method) => method.isPreferred) ?? paymentMethods[0];
+
         setDriverDirectProfile({
           name: normalize(payload.trip?.driver?.user?.name),
-          upiId: normalize(payload.trip?.driver?.payoutAccount?.upiId),
-          upiQrImageUrl: normalize(payload.trip?.driver?.payoutAccount?.upiQrImageUrl)
+          upiId: preferredMethod?.upiId ?? normalize(payload.trip?.driver?.payoutAccount?.upiId),
+          upiQrImageUrl:
+            preferredMethod?.qrImageUrl ?? normalize(payload.trip?.driver?.payoutAccount?.upiQrImageUrl),
+          paymentMethodId: preferredMethod?.id,
+          paymentMethods
         });
+        setSelectedDriverPaymentMethodId(preferredMethod?.id);
       } catch {
         if (!cancelled) {
-          setDriverDirectProfile({});
+          setDriverDirectProfile({ paymentMethods: [] });
+          setSelectedDriverPaymentMethodId(undefined);
         }
       } finally {
         if (!cancelled) {
@@ -110,7 +161,22 @@ export function CustomerPaymentScreen({ navigation }: Props) {
     };
   }, [orderId]);
 
-  const hasDriverDirectUpi = Boolean(driverDirectProfile.upiId);
+  const selectedDriverPaymentMethod = useMemo(() => {
+    const methods = driverDirectProfile.paymentMethods;
+    if (!methods.length) {
+      return undefined;
+    }
+    return (
+      methods.find((method) => method.id === selectedDriverPaymentMethodId) ??
+      methods.find((method) => method.isPreferred) ??
+      methods[0]
+    );
+  }, [driverDirectProfile.paymentMethods, selectedDriverPaymentMethodId]);
+
+  const resolvedDriverUpiId = selectedDriverPaymentMethod?.upiId ?? driverDirectProfile.upiId;
+  const resolvedDriverUpiQrImageUrl =
+    selectedDriverPaymentMethod?.qrImageUrl ?? driverDirectProfile.upiQrImageUrl;
+  const hasDriverDirectUpi = Boolean(resolvedDriverUpiId);
   const methods = useMemo(() => {
     if (!hasDriverDirectUpi) {
       return METHODS;
@@ -132,13 +198,32 @@ export function CustomerPaymentScreen({ navigation }: Props) {
     }
   }, [hasDriverDirectUpi, selectedMethod, setPaymentMethod]);
 
+  useEffect(() => {
+    const availableMethods = driverDirectProfile.paymentMethods;
+    if (!availableMethods.length) {
+      setSelectedDriverPaymentMethodId(undefined);
+      return;
+    }
+
+    const isCurrentStillAvailable = availableMethods.some(
+      (method) => method.id === selectedDriverPaymentMethodId
+    );
+
+    if (isCurrentStillAvailable) {
+      return;
+    }
+
+    const preferred = availableMethods.find((method) => method.isPreferred) ?? availableMethods[0];
+    setSelectedDriverPaymentMethodId(preferred?.id);
+  }, [driverDirectProfile.paymentMethods, selectedDriverPaymentMethodId]);
+
   const driverUpiIntentUrl = useMemo(() => {
-    if (!driverDirectProfile.upiId || !(baseAmount > 0)) {
+    if (!resolvedDriverUpiId || !(baseAmount > 0)) {
       return undefined;
     }
 
     const params = new URLSearchParams({
-      pa: driverDirectProfile.upiId,
+      pa: resolvedDriverUpiId,
       pn: driverDirectProfile.name ?? 'Driver',
       tn: `Qargo ride payment ${orderId?.slice(0, 8) ?? ''}`,
       am: baseAmount.toFixed(2),
@@ -146,15 +231,15 @@ export function CustomerPaymentScreen({ navigation }: Props) {
     });
 
     return `upi://pay?${params.toString()}`;
-  }, [baseAmount, driverDirectProfile.name, driverDirectProfile.upiId, orderId]);
+  }, [baseAmount, driverDirectProfile.name, orderId, resolvedDriverUpiId]);
 
   const driverUpiQrImageUrl = useMemo(() => {
-    if (!driverDirectProfile.upiId) {
+    if (!resolvedDriverUpiId) {
       return undefined;
     }
 
-    if (driverDirectProfile.upiQrImageUrl) {
-      return driverDirectProfile.upiQrImageUrl;
+    if (resolvedDriverUpiQrImageUrl) {
+      return resolvedDriverUpiQrImageUrl;
     }
 
     if (!driverUpiIntentUrl) {
@@ -162,7 +247,7 @@ export function CustomerPaymentScreen({ navigation }: Props) {
     }
 
     return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(driverUpiIntentUrl)}`;
-  }, [driverDirectProfile.upiId, driverDirectProfile.upiQrImageUrl, driverUpiIntentUrl]);
+  }, [driverUpiIntentUrl, resolvedDriverUpiId, resolvedDriverUpiQrImageUrl]);
 
   const buttonLabel = useMemo(() => {
     if (orderId && estimatedPrice) {
@@ -217,7 +302,7 @@ export function CustomerPaymentScreen({ navigation }: Props) {
             ? 'WALLET'
             : 'RAZORPAY';
 
-      if (isDirectToDriver && !driverDirectProfile.upiId) {
+      if (isDirectToDriver && !resolvedDriverUpiId) {
         Alert.alert('Driver UPI unavailable', 'Driver UPI details are not available for this trip yet.');
         return;
       }
@@ -227,8 +312,9 @@ export function CustomerPaymentScreen({ navigation }: Props) {
         provider,
         amount: provider === 'RAZORPAY' ? payableAmount : baseAmount,
         directPayToDriver: isDirectToDriver || undefined,
-        directUpiVpa: isDirectToDriver ? driverDirectProfile.upiId : undefined,
-        directUpiName: isDirectToDriver ? driverDirectProfile.name : undefined
+        directUpiVpa: isDirectToDriver ? resolvedDriverUpiId : undefined,
+        directUpiName: isDirectToDriver ? driverDirectProfile.name : undefined,
+        driverPaymentMethodId: isDirectToDriver ? selectedDriverPaymentMethod?.id : undefined
       });
 
       if (provider === 'WALLET') {
@@ -317,7 +403,33 @@ export function CustomerPaymentScreen({ navigation }: Props) {
               ) : (
                 <>
                   <Text style={styles.driverDirectLine}>Driver: {driverDirectProfile.name ?? 'Assigned driver'}</Text>
-                  <Text style={styles.driverDirectLine}>UPI ID: {driverDirectProfile.upiId ?? 'Not available'}</Text>
+                  <Text style={styles.driverDirectLine}>UPI ID: {resolvedDriverUpiId ?? 'Not available'}</Text>
+                  {driverDirectProfile.paymentMethods.length > 1 ? (
+                    <View style={styles.driverMethodChipRow}>
+                      {driverDirectProfile.paymentMethods.map((method) => {
+                        const isSelected = method.id === selectedDriverPaymentMethod?.id;
+                        return (
+                          <Pressable
+                            key={method.id}
+                            style={[
+                              styles.driverMethodChip,
+                              isSelected && styles.driverMethodChipSelected
+                            ]}
+                            onPress={() => setSelectedDriverPaymentMethodId(method.id)}
+                          >
+                            <Text
+                              style={[
+                                styles.driverMethodChipText,
+                                isSelected && styles.driverMethodChipTextSelected
+                              ]}
+                            >
+                              {method.label ?? method.upiId}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
                   {driverUpiQrImageUrl ? <Image source={{ uri: driverUpiQrImageUrl }} style={styles.qrImage} /> : null}
                 </>
               )}
@@ -448,6 +560,32 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     fontFamily: 'Manrope_600SemiBold',
     fontSize: 12
+  },
+  driverMethodChipRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6
+  },
+  driverMethodChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 4
+  },
+  driverMethodChipSelected: {
+    borderColor: '#0F766E',
+    backgroundColor: '#CCFBF1'
+  },
+  driverMethodChipText: {
+    color: '#134E4A',
+    fontFamily: 'Manrope_600SemiBold',
+    fontSize: 11
+  },
+  driverMethodChipTextSelected: {
+    color: '#065F46'
   },
   qrImage: {
     width: 168,

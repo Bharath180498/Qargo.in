@@ -11,7 +11,11 @@ import {
 import * as Location from 'expo-location';
 import { colors, radius, spacing, typography } from '../../theme';
 import { useDriverAppStore } from '../../store/useDriverAppStore';
+import { useDriverI18n } from '../../i18n/useDriverI18n';
+import { useDriverUxStore } from '../../store/useDriverUxStore';
+import { LanguageSwitcher } from '../../components/LanguageSwitcher';
 import { openGoogleMapsNavigation } from '../../utils/mapsNavigation';
+import { speakDriverMessage } from '../../utils/voiceGuide';
 
 const actionMap: Array<{ status: string; endpoint: string; label: string; payload?: Record<string, unknown> }> = [
   { status: 'ASSIGNED', endpoint: 'accept', label: 'Start Trip' },
@@ -35,20 +39,42 @@ const TRIP_STAGES: Array<{ key: string; label: string }> = [
   { key: 'COMPLETED', label: 'Delivered' }
 ];
 
+function getAvailabilityCopy(status?: 'ONLINE' | 'OFFLINE' | 'BUSY', t?: (key: any) => string) {
+  if (!t) {
+    return '';
+  }
+
+  if (status === 'ONLINE') {
+    return t('home.availability.online');
+  }
+  if (status === 'BUSY') {
+    return t('home.availability.busy');
+  }
+  return t('home.availability.offline');
+}
+
 export function HomeScreen() {
+  const { t } = useDriverI18n();
   const availabilityStatus = useDriverAppStore((state) => state.availabilityStatus);
   const setAvailability = useDriverAppStore((state) => state.setAvailability);
   const updateLocation = useDriverAppStore((state) => state.updateLocation);
   const currentJob = useDriverAppStore((state) => state.currentJob);
   const nextJob = useDriverAppStore((state) => state.nextJob);
   const pendingOffers = useDriverAppStore((state) => state.pendingOffers);
+  const earnings = useDriverAppStore((state) => state.earnings);
   const acceptOffer = useDriverAppStore((state) => state.acceptOffer);
   const rejectOffer = useDriverAppStore((state) => state.rejectOffer);
   const runTripAction = useDriverAppStore((state) => state.runTripAction);
+
+  const voiceGuidanceEnabled = useDriverUxStore((state) => state.voiceGuidanceEnabled);
+  const guidedHintsEnabled = useDriverUxStore((state) => state.guidedHintsEnabled);
+
   const [lastKnownLocation, setLastKnownLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [now, setNow] = useState(Date.now());
 
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
+  const previousOfferId = useRef<string | undefined>(undefined);
+  const previousStatus = useRef<string | undefined>(undefined);
 
   const activeOffer = pendingOffers[0];
   const activeAction = useMemo(
@@ -77,10 +103,45 @@ export function HomeScreen() {
     return Math.min(1, elapsed / total);
   }, [activeOffer?.createdAt, activeOffer?.expiresAt, now]);
 
+  const assistantText = useMemo(() => {
+    if (activeOffer) {
+      return t('home.assistant.offer');
+    }
+    if (currentJob) {
+      return t('home.assistant.current');
+    }
+    return t('home.assistant.idle');
+  }, [activeOffer, currentJob, t]);
+
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (activeOffer?.id && previousOfferId.current !== activeOffer.id) {
+      previousOfferId.current = activeOffer.id;
+      speakDriverMessage(t('home.assistant.offer'), voiceGuidanceEnabled);
+    }
+
+    if (!activeOffer?.id) {
+      previousOfferId.current = undefined;
+    }
+  }, [activeOffer?.id, t, voiceGuidanceEnabled]);
+
+  useEffect(() => {
+    const currentStatus = currentJob?.status;
+    if (!currentStatus) {
+      previousStatus.current = undefined;
+      return;
+    }
+
+    if (previousStatus.current !== currentStatus) {
+      previousStatus.current = currentStatus;
+      const stageLabel = TRIP_STAGES.find((entry) => entry.key === currentStatus)?.label ?? currentStatus;
+      speakDriverMessage(`Trip stage: ${stageLabel}`, voiceGuidanceEnabled);
+    }
+  }, [currentJob?.status, voiceGuidanceEnabled]);
 
   useEffect(() => {
     const startTracking = async () => {
@@ -146,6 +207,7 @@ export function HomeScreen() {
 
     try {
       await runTripAction(currentJob.id, activeAction.endpoint, activeAction.payload);
+      speakDriverMessage(activeAction.label, voiceGuidanceEnabled);
     } catch {
       Alert.alert('Action failed', 'Could not update trip state.');
     }
@@ -188,33 +250,62 @@ export function HomeScreen() {
     });
   };
 
+  const onAcceptOffer = async () => {
+    if (!activeOffer?.id) {
+      return;
+    }
+    await acceptOffer(activeOffer.id);
+    speakDriverMessage('Job accepted. Start navigation now.', voiceGuidanceEnabled);
+  };
+
+  const onRejectOffer = async () => {
+    if (!activeOffer?.id) {
+      return;
+    }
+    await rejectOffer(activeOffer.id);
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Qargo Driver</Text>
+        <View style={styles.headerRow}>
+          <Text style={styles.title}>{t('home.title')}</Text>
+          <LanguageSwitcher />
+        </View>
+
+        {guidedHintsEnabled ? (
+          <View style={styles.assistantCard}>
+            <Text style={styles.assistantTitle}>{t('home.assistant.title')}</Text>
+            <Text style={styles.assistantText}>{assistantText}</Text>
+          </View>
+        ) : null}
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Availability</Text>
-          <Text style={styles.status}>
-            {availabilityStatus === 'ONLINE'
-              ? 'You are online'
-              : availabilityStatus === 'BUSY'
-                ? 'Trip in progress'
-                : 'You are offline'}
-          </Text>
+          <Text style={styles.cardTitle}>{t('home.availability.title')}</Text>
+          <Text style={styles.status}>{getAvailabilityCopy(availabilityStatus, t)}</Text>
           <View style={styles.row}>
             <Pressable style={[styles.toggleButton, styles.onlineButton]} onPress={() => void setAvailability('ONLINE')}>
-              <Text style={styles.toggleButtonText}>Go Online</Text>
+              <Text style={styles.toggleButtonText}>{t('home.online')}</Text>
             </Pressable>
             <Pressable style={[styles.toggleButton, styles.offlineButton]} onPress={() => void setAvailability('OFFLINE')}>
-              <Text style={[styles.toggleButtonText, { color: colors.accent }]}>Go Offline</Text>
+              <Text style={[styles.toggleButtonText, { color: colors.accent }]}>{t('home.offline')}</Text>
             </Pressable>
           </View>
         </View>
 
+        <View style={[styles.card, styles.earningsCard]}>
+          <Text style={styles.cardTitle}>Earnings Snapshot</Text>
+          <Text style={styles.earningsValue}>
+            INR {(earnings?.summary.takeHomeAfterSubscription ?? earnings?.summary.netPayout ?? 0).toFixed(2)}
+          </Text>
+          <Text style={styles.info}>Trips (30d): {earnings?.tripCount ?? 0}</Text>
+          <Text style={styles.info}>Plan: {earnings?.subscription?.plan ?? 'GO'}</Text>
+          <Text style={styles.info}>Open Earnings tab to view full payout and plan details.</Text>
+        </View>
+
         <View style={[styles.card, activeOffer ? styles.offerCardHighlight : undefined]}>
           <View style={styles.offerHeaderRow}>
-            <Text style={styles.cardTitle}>Incoming Job</Text>
+            <Text style={styles.cardTitle}>{t('home.offer.title')}</Text>
             <Text style={styles.offerTimer}>{offerSecondsLeft}s</Text>
           </View>
           {activeOffer ? (
@@ -230,31 +321,31 @@ export function HomeScreen() {
               <View style={styles.row}>
                 <Pressable
                   style={[styles.toggleButton, styles.onlineButton]}
-                  onPress={() => void acceptOffer(activeOffer.id)}
+                  onPress={() => void onAcceptOffer()}
                 >
-                  <Text style={styles.toggleButtonText}>Accept Job</Text>
+                  <Text style={styles.toggleButtonText}>{t('home.offer.accept')}</Text>
                 </Pressable>
                 <Pressable
                   style={[styles.toggleButton, styles.offlineButton]}
-                  onPress={() => void rejectOffer(activeOffer.id)}
+                  onPress={() => void onRejectOffer()}
                 >
-                  <Text style={[styles.toggleButtonText, { color: colors.accent }]}>Skip</Text>
+                  <Text style={[styles.toggleButtonText, { color: colors.accent }]}>{t('home.offer.skip')}</Text>
                 </Pressable>
               </View>
               <Pressable style={styles.navButton} onPress={() => void navigateToOfferPickup()}>
-                <Text style={styles.navButtonText}>Open Pickup in Google Maps</Text>
+                <Text style={styles.navButtonText}>{t('home.offer.navigate')}</Text>
               </Pressable>
               {pendingOffers.length > 1 ? (
                 <Text style={styles.offerQueueNote}>+{pendingOffers.length - 1} more offer(s) waiting</Text>
               ) : null}
             </>
           ) : (
-            <Text style={styles.info}>No incoming jobs right now. Keep app open and stay online.</Text>
+            <Text style={styles.info}>{t('home.offer.none')}</Text>
           )}
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Current Trip</Text>
+          <Text style={styles.cardTitle}>{t('home.trip.title')}</Text>
           {currentJob ? (
             <>
               <Text style={styles.info}>Pickup: {currentJob.order?.pickupAddress}</Text>
@@ -279,7 +370,7 @@ export function HomeScreen() {
               </View>
               <Pressable style={styles.navButton} onPress={() => void quickNavigateCurrent()}>
                 <Text style={styles.navButtonText}>
-                  {currentJob.status === 'IN_TRANSIT' ? 'Navigate to Drop' : 'Navigate to Pickup'}
+                  {currentJob.status === 'IN_TRANSIT' ? t('home.trip.navigateDrop') : t('home.trip.navigatePickup')}
                 </Text>
               </Pressable>
               {activeAction ? (
@@ -289,12 +380,12 @@ export function HomeScreen() {
               ) : null}
             </>
           ) : (
-            <Text style={styles.info}>No active trip. Stay online to receive offers.</Text>
+            <Text style={styles.info}>{t('home.trip.none')}</Text>
           )}
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Queued Job</Text>
+          <Text style={styles.cardTitle}>{t('home.queue.title')}</Text>
           {nextJob ? (
             <>
               <Text style={styles.info}>Order ID: {nextJob.id}</Text>
@@ -302,8 +393,14 @@ export function HomeScreen() {
               <Text style={styles.info}>Drop: {nextJob.dropAddress}</Text>
             </>
           ) : (
-            <Text style={styles.info}>No queued order right now.</Text>
+            <Text style={styles.info}>{t('home.queue.none')}</Text>
           )}
+        </View>
+
+        <View style={styles.supportCard}>
+          <Text style={styles.supportTitle}>{t('home.support')}</Text>
+          <Text style={styles.supportSub}>{t('home.supportSub')}</Text>
+          <Text style={styles.supportPhone}>9844259899</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -317,9 +414,40 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     width: '100%',
     maxWidth: 460,
-    alignSelf: 'center'
+    alignSelf: 'center',
+    paddingBottom: 120
+  },
+  earningsCard: {
+    borderColor: '#99F6E4',
+    backgroundColor: '#ECFEFF'
+  },
+  earningsValue: {
+    fontFamily: typography.heading,
+    color: colors.secondary,
+    fontSize: 28
+  },
+  headerRow: {
+    gap: spacing.sm
   },
   title: { fontFamily: typography.heading, color: colors.accent, fontSize: 30 },
+  assistantCard: {
+    borderWidth: 1,
+    borderColor: '#99F6E4',
+    backgroundColor: '#ECFEFF',
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    gap: 6
+  },
+  assistantTitle: {
+    fontFamily: typography.bodyBold,
+    color: '#134E4A',
+    fontSize: 14
+  },
+  assistantText: {
+    fontFamily: typography.body,
+    color: colors.accent,
+    fontSize: 13
+  },
   card: {
     backgroundColor: colors.white,
     borderRadius: radius.lg,
@@ -374,6 +502,8 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: radius.sm,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 52,
     paddingVertical: spacing.sm
   },
   onlineButton: { backgroundColor: colors.secondary },
@@ -384,7 +514,8 @@ const styles = StyleSheet.create({
   },
   toggleButtonText: {
     fontFamily: typography.bodyBold,
-    color: colors.white
+    color: colors.white,
+    fontSize: 15
   },
   info: { fontFamily: typography.body, color: colors.mutedText },
   navButton: {
@@ -393,23 +524,29 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.secondary,
     alignItems: 'center',
-    paddingVertical: spacing.xs,
-    backgroundColor: '#ECFDF5'
+    paddingVertical: spacing.sm,
+    backgroundColor: '#ECFDF5',
+    minHeight: 48,
+    justifyContent: 'center'
   },
   navButtonText: {
     fontFamily: typography.bodyBold,
-    color: colors.secondary
+    color: colors.secondary,
+    fontSize: 14
   },
   mainActionButton: {
     marginTop: spacing.xs,
     borderRadius: radius.sm,
     alignItems: 'center',
+    justifyContent: 'center',
     paddingVertical: spacing.sm,
+    minHeight: 54,
     backgroundColor: colors.primary
   },
   mainActionText: {
     fontFamily: typography.bodyBold,
-    color: colors.white
+    color: colors.white,
+    fontSize: 15
   },
   stageMap: {
     marginTop: spacing.xs,
@@ -461,5 +598,26 @@ const styles = StyleSheet.create({
   stageLabelCompleted: {
     color: colors.accent,
     fontFamily: typography.bodyBold
+  },
+  supportCard: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    padding: spacing.sm,
+    gap: 4
+  },
+  supportTitle: {
+    fontFamily: typography.bodyBold,
+    color: '#1D4ED8'
+  },
+  supportSub: {
+    fontFamily: typography.body,
+    color: '#334155',
+    fontSize: 12
+  },
+  supportPhone: {
+    fontFamily: typography.bodyBold,
+    color: '#0F172A'
   }
 });

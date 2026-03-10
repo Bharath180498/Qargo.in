@@ -44,7 +44,10 @@ const FALLBACK_REGION: Region = {
   longitudeDelta: 0.009
 };
 
-const SEARCH_DEBOUNCE_MS = 280;
+const SEARCH_DEBOUNCE_MS = 160;
+const AUTOCOMPLETE_BACKEND_TIMEOUT_MS = 1800;
+const AUTOCOMPLETE_DIRECT_TIMEOUT_MS = 1800;
+const AUTOCOMPLETE_RADIUS_METERS = 20000;
 const MOBILE_GOOGLE_MAPS_API_KEY =
   typeof (
     appConfig as {
@@ -68,6 +71,122 @@ function createPlacesSessionToken() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+interface BackendAutocompleteResult {
+  suggestions: AddressSuggestion[];
+  keyConfigured?: boolean;
+  message?: string;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function mergeAddressSuggestions(primary: AddressSuggestion[], secondary: AddressSuggestion[]) {
+  const seen = new Set<string>();
+  const merged: AddressSuggestion[] = [];
+
+  for (const item of [...primary, ...secondary]) {
+    if (!item.placeId || seen.has(item.placeId)) {
+      continue;
+    }
+
+    seen.add(item.placeId);
+    merged.push(item);
+
+    if (merged.length >= 8) {
+      break;
+    }
+  }
+
+  return merged;
+}
+
+async function awaitFirstNonEmptySuggestions(tasks: Array<Promise<AddressSuggestion[]>>) {
+  if (tasks.length === 0) {
+    return [] as AddressSuggestion[];
+  }
+
+  return new Promise<AddressSuggestion[]>((resolve) => {
+    let pending = tasks.length;
+    let resolved = false;
+
+    const finishIfDone = () => {
+      pending -= 1;
+      if (!resolved && pending <= 0) {
+        resolve([]);
+      }
+    };
+
+    tasks.forEach((task) => {
+      task
+        .then((result) => {
+          if (resolved) {
+            return;
+          }
+
+          if (result.length > 0) {
+            resolved = true;
+            resolve(result);
+            return;
+          }
+
+          finishIfDone();
+        })
+        .catch(() => {
+          finishIfDone();
+        });
+    });
+  });
+}
+
+async function fetchBackendAutocomplete(input: {
+  query: string;
+  lat: number;
+  lng: number;
+  sessionToken: string;
+}): Promise<BackendAutocompleteResult> {
+  try {
+    const response = await api.get('/maps/places/autocomplete', {
+      timeout: AUTOCOMPLETE_BACKEND_TIMEOUT_MS,
+      params: {
+        input: input.query,
+        lat: input.lat,
+        lng: input.lng,
+        sessionToken: input.sessionToken,
+        countryCode: 'IN'
+      }
+    });
+
+    const payload = response.data as {
+      suggestions?: AddressSuggestion[];
+      keyConfigured?: boolean;
+      message?: string;
+    };
+
+    return {
+      suggestions: Array.isArray(payload.suggestions) ? payload.suggestions : [],
+      keyConfigured: payload.keyConfigured,
+      message: payload.message
+    };
+  } catch {
+    return {
+      suggestions: []
+    };
+  }
+}
+
 async function fetchGoogleAutocompleteLegacy(input: {
   query: string;
   lat: number;
@@ -83,17 +202,26 @@ async function fetchGoogleAutocompleteLegacy(input: {
     key: MOBILE_GOOGLE_MAPS_API_KEY,
     language: 'en',
     components: 'country:in',
+    types: 'geocode',
     location: `${input.lat},${input.lng}`,
-    radius: '20000',
+    radius: String(AUTOCOMPLETE_RADIUS_METERS),
     sessiontoken: input.sessionToken
   });
 
-  const response = await fetch(`https://maps.googleapis.com/maps/api/place/autocomplete/json?${params.toString()}`, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json'
-    }
-  });
+  const response = await fetchWithTimeout(
+    `https://maps.googleapis.com/maps/api/place/autocomplete/json?${params.toString()}`,
+    {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json'
+      }
+    },
+    AUTOCOMPLETE_DIRECT_TIMEOUT_MS
+  );
+
+  if (!response) {
+    return [] as AddressSuggestion[];
+  }
 
   if (!response.ok) {
     return [] as AddressSuggestion[];
@@ -142,31 +270,44 @@ async function fetchGoogleAutocompleteNew(input: {
     return [] as AddressSuggestion[];
   }
 
-  const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': MOBILE_GOOGLE_MAPS_API_KEY,
-      'X-Goog-FieldMask':
-        'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text,suggestions.placePrediction.structuredFormat.mainText.text,suggestions.placePrediction.structuredFormat.secondaryText.text'
-    },
-    body: JSON.stringify({
-      input: input.query,
-      languageCode: 'en',
-      regionCode: 'IN',
-      sessionToken: input.sessionToken,
-      locationBias: {
-        circle: {
-          center: {
-            latitude: input.lat,
-            longitude: input.lng
-          },
-          radius: 20000
+  const response = await fetchWithTimeout(
+    'https://places.googleapis.com/v1/places:autocomplete',
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': MOBILE_GOOGLE_MAPS_API_KEY,
+        'X-Goog-FieldMask':
+          'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text,suggestions.placePrediction.structuredFormat.mainText.text,suggestions.placePrediction.structuredFormat.secondaryText.text'
+      },
+      body: JSON.stringify({
+        input: input.query,
+        languageCode: 'en',
+        regionCode: 'IN',
+        includeQueryPredictions: false,
+        sessionToken: input.sessionToken,
+        locationBias: {
+          circle: {
+            center: {
+              latitude: input.lat,
+              longitude: input.lng
+            },
+            radius: AUTOCOMPLETE_RADIUS_METERS
+          }
+        },
+        origin: {
+          latitude: input.lat,
+          longitude: input.lng
         }
-      }
-    })
-  });
+      })
+    },
+    AUTOCOMPLETE_DIRECT_TIMEOUT_MS
+  );
+
+  if (!response) {
+    return [] as AddressSuggestion[];
+  }
 
   if (!response.ok) {
     return [] as AddressSuggestion[];
@@ -214,70 +355,12 @@ async function fetchGoogleAutocompleteDirect(input: {
   lng: number;
   sessionToken: string;
 }) {
-  const legacy = await fetchGoogleAutocompleteLegacy(input);
-  if (legacy.length > 0) {
-    return legacy;
-  }
+  const [modern, legacy] = await Promise.all([
+    fetchGoogleAutocompleteNew(input),
+    fetchGoogleAutocompleteLegacy(input)
+  ]);
 
-  return fetchGoogleAutocompleteNew(input);
-}
-
-async function fetchNominatimAutocomplete(input: { query: string }) {
-  const params = new URLSearchParams({
-    q: input.query,
-    format: 'jsonv2',
-    addressdetails: '1',
-    limit: '8',
-    countrycodes: 'in'
-  });
-
-  const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': 'Qargo/1.0'
-    }
-  });
-
-  if (!response.ok) {
-    return [] as AddressSuggestion[];
-  }
-
-  const payload = (await response.json()) as Array<{
-    place_id?: number;
-    lat?: string;
-    lon?: string;
-    display_name?: string;
-    name?: string;
-  }>;
-
-  const suggestions = payload
-    .map((entry, index) => {
-      const lat = Number(entry.lat);
-      const lng = Number(entry.lon);
-      const address = entry.display_name?.trim();
-      if (!address || Number.isNaN(lat) || Number.isNaN(lng)) {
-        return null;
-      }
-
-      const primary = entry.name?.trim() || address.split(',')[0] || address;
-      const secondary = address.includes(',') ? address.split(',').slice(1).join(',').trim() : address;
-      const placeId = `nominatim-${entry.place_id ?? index}`;
-
-      return {
-        id: placeId,
-        placeId,
-        primaryText: primary,
-        secondaryText: secondary,
-        address,
-        provider: 'nominatim',
-        lat,
-        lng
-      } satisfies AddressSuggestion;
-    })
-    .filter(Boolean) as AddressSuggestion[];
-
-  return suggestions.slice(0, 8);
+  return mergeAddressSuggestions(modern, legacy);
 }
 
 async function fetchGooglePlaceDetailsLegacy(placeId: string) {
@@ -415,6 +498,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
 
   const mapRef = useRef<MapViewRef | null>(null);
   const keyboardLift = useRef(new Animated.Value(0)).current;
+  const autocompleteCacheRef = useRef<Map<string, AddressSuggestion[]>>(new Map());
 
   const [mapRegion, setMapRegion] = useState<Region>(FALLBACK_REGION);
   const [step, setStep] = useState<SelectionStep>('PICKUP');
@@ -548,116 +632,103 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
       return;
     }
 
+    const cacheKey = `${step}:${query.toLowerCase()}`;
+    const cached = autocompleteCacheRef.current.get(cacheKey);
+
+    if (cached && cached.length > 0) {
+      setSuggestions(cached);
+      setSearchMessage(undefined);
+    }
+
     let cancelled = false;
-    setSearchLoading(true);
+    setSearchLoading(!cached || cached.length === 0);
     setSearchMessage(undefined);
 
     const timeoutId = setTimeout(() => {
-      void api
-        .get('/maps/places/autocomplete', {
-          params: {
-            input: query,
-            lat: mapRegion.latitude,
-            lng: mapRegion.longitude,
-            sessionToken: searchSessionToken,
-            countryCode: 'IN'
-          }
-        })
-        .then(async (response) => {
-          if (cancelled) {
-            return;
-          }
-
-          const payload = response.data as {
-            suggestions?: AddressSuggestion[];
-            keyConfigured?: boolean;
-            message?: string;
-          };
-          let results = Array.isArray(payload.suggestions) ? payload.suggestions : [];
-
-          if (results.length === 0 && MOBILE_GOOGLE_MAPS_API_KEY) {
-            const direct = await fetchGoogleAutocompleteDirect({
+      void (async () => {
+        const backendPromise = fetchBackendAutocomplete({
+          query,
+          lat: mapRegion.latitude,
+          lng: mapRegion.longitude,
+          sessionToken: searchSessionToken
+        });
+        const directPromise = MOBILE_GOOGLE_MAPS_API_KEY
+          ? fetchGoogleAutocompleteDirect({
               query,
               lat: mapRegion.latitude,
               lng: mapRegion.longitude,
               sessionToken: searchSessionToken
-            });
-            if (!cancelled && direct.length > 0) {
-              results = direct;
-            }
-          }
+            })
+          : Promise.resolve([] as AddressSuggestion[]);
 
-          if (results.length === 0) {
-            const openFallback = await fetchNominatimAutocomplete({ query });
-            if (!cancelled && openFallback.length > 0) {
-              results = openFallback;
-            }
-          }
+        const firstFastResults = await awaitFirstNonEmptySuggestions([
+          backendPromise.then((result) => result.suggestions),
+          directPromise
+        ]);
 
-          setSuggestions(results);
+        if (cancelled) {
+          return;
+        }
 
-          if (results.length === 0) {
-            if (payload.keyConfigured === false) {
-              setSearchMessage('Google Places key missing on backend.');
-            } else if (payload.message) {
-              setSearchMessage(payload.message);
-            } else {
-              setSearchMessage('No Google Maps matches for this query yet.');
-            }
-          }
-        })
-        .catch(async () => {
-          if (cancelled) {
-            return;
-          }
+        if (firstFastResults.length > 0) {
+          autocompleteCacheRef.current.set(cacheKey, firstFastResults);
+          setSuggestions(firstFastResults);
+          setSearchMessage(undefined);
+          setSearchLoading(false);
+          return;
+        }
 
-          const fallbackResults = await fetchGoogleAutocompleteDirect({
-            query,
-            lat: mapRegion.latitude,
-            lng: mapRegion.longitude,
-            sessionToken: searchSessionToken
-          });
+        const [backendResult, directResult] = await Promise.all([backendPromise, directPromise]);
 
-          if (cancelled) {
-            return;
-          }
+        if (cancelled) {
+          return;
+        }
 
-          if (fallbackResults.length > 0) {
-            setSuggestions(fallbackResults);
-            setSearchMessage(undefined);
-            return;
-          }
+        const mergedResults = mergeAddressSuggestions(backendResult.suggestions, directResult);
 
-          const openFallback = await fetchNominatimAutocomplete({ query });
-          if (cancelled) {
-            return;
-          }
+        if (mergedResults.length > 0) {
+          autocompleteCacheRef.current.set(cacheKey, mergedResults);
+          setSuggestions(mergedResults);
+          setSearchMessage(undefined);
+          setSearchLoading(false);
+          return;
+        }
 
-          if (openFallback.length > 0) {
-            setSuggestions(openFallback);
-            setSearchMessage(undefined);
-            return;
-          }
+        setSuggestions([]);
 
-          setSuggestions([]);
-          setSearchMessage(
-            MOBILE_GOOGLE_MAPS_API_KEY
-              ? 'Google Maps suggestions unavailable right now.'
-              : 'Google Maps suggestion service unavailable. Redeploy backend or set mobile key.'
-          );
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setSearchLoading(false);
-          }
-        });
+        if (backendResult.keyConfigured === false && !MOBILE_GOOGLE_MAPS_API_KEY) {
+          setSearchMessage('Google Maps key is missing for places search.');
+        } else if (backendResult.message) {
+          setSearchMessage(backendResult.message);
+        } else {
+          setSearchMessage('No nearby Google Maps matches for this query.');
+        }
+
+        setSearchLoading(false);
+      })().catch(() => {
+        if (cancelled) {
+          return;
+        }
+
+        setSuggestions([]);
+
+        if (MOBILE_GOOGLE_MAPS_API_KEY) {
+          setSearchMessage('Google Maps suggestions are temporarily unavailable.');
+        } else {
+          setSearchMessage('Google Maps suggestion service unavailable right now.');
+        }
+      }).finally(() => {
+        if (!cancelled) {
+          setSearchLoading(false);
+        }
+      });
     }, SEARCH_DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [activeQuery, activeSearchSelected, mapRegion.latitude, mapRegion.longitude, searchSessionToken]);
+  }, [activeQuery, activeSearchSelected, mapRegion.latitude, mapRegion.longitude, searchSessionToken, step]);
 
   const activeTitle = useMemo(
     () => (step === 'PICKUP' ? 'Search pick-up, then pin exact spot' : 'Search drop-off, then pin exact spot'),

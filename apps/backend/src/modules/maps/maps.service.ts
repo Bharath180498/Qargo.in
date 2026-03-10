@@ -39,6 +39,9 @@ interface SuggestionResult {
 export class MapsService {
   constructor(private readonly configService: ConfigService) {}
 
+  private static readonly AUTOCOMPLETE_TIMEOUT_MS = 1800;
+  private static readonly AUTOCOMPLETE_RADIUS_METERS = 20000;
+
   private get googleMapsApiKey() {
     return this.configService.get<string>('googleMapsApiKey') ?? '';
   }
@@ -101,6 +104,45 @@ export class MapsService {
     return Number.isFinite(parsed) ? Math.round(parsed) : 0;
   }
 
+  private async fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      return await fetch(url, {
+        ...init,
+        signal: controller.signal
+      });
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private mergeAutocompleteSuggestions(
+    primary: PlacesAutocompleteSuggestion[],
+    secondary: PlacesAutocompleteSuggestion[]
+  ) {
+    const seen = new Set<string>();
+    const merged: PlacesAutocompleteSuggestion[] = [];
+
+    for (const entry of [...primary, ...secondary]) {
+      if (!entry.placeId || seen.has(entry.placeId)) {
+        continue;
+      }
+
+      seen.add(entry.placeId);
+      merged.push(entry);
+
+      if (merged.length >= 8) {
+        break;
+      }
+    }
+
+    return merged;
+  }
+
   private async autocompleteLegacy(input: {
     query: string;
     lat?: number;
@@ -113,7 +155,8 @@ export class MapsService {
       key: this.googleMapsApiKey,
       language: 'en',
       components: `country:${input.countryCode.toLowerCase()}`,
-      strictbounds: 'false'
+      strictbounds: 'false',
+      types: 'geocode'
     });
 
     if (input.sessionToken?.trim()) {
@@ -122,15 +165,27 @@ export class MapsService {
 
     if (typeof input.lat === 'number' && typeof input.lng === 'number') {
       params.set('location', `${input.lat},${input.lng}`);
-      params.set('radius', '20000');
+      params.set('radius', String(MapsService.AUTOCOMPLETE_RADIUS_METERS));
     }
 
-    const response = await fetch(`https://maps.googleapis.com/maps/api/place/autocomplete/json?${params.toString()}`, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json'
-      }
-    });
+    const response = await this.fetchWithTimeout(
+      `https://maps.googleapis.com/maps/api/place/autocomplete/json?${params.toString()}`,
+      {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json'
+        }
+      },
+      MapsService.AUTOCOMPLETE_TIMEOUT_MS
+    );
+
+    if (!response) {
+      return {
+        status: 'TIMEOUT',
+        message: 'Google Places autocomplete timed out',
+        suggestions: []
+      };
+    }
 
     if (!response.ok) {
       return {
@@ -193,7 +248,8 @@ export class MapsService {
     const body: Record<string, unknown> = {
       input: input.query,
       languageCode: 'en',
-      regionCode: input.countryCode.toUpperCase()
+      regionCode: input.countryCode.toUpperCase(),
+      includeQueryPredictions: false
     };
 
     if (input.sessionToken?.trim()) {
@@ -207,22 +263,38 @@ export class MapsService {
             latitude: input.lat,
             longitude: input.lng
           },
-          radius: 20000
+          radius: MapsService.AUTOCOMPLETE_RADIUS_METERS
         }
+      };
+      body.origin = {
+        latitude: input.lat,
+        longitude: input.lng
       };
     }
 
-    const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': this.googleMapsApiKey,
-        'X-Goog-FieldMask':
-          'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text,suggestions.placePrediction.structuredFormat.mainText.text,suggestions.placePrediction.structuredFormat.secondaryText.text'
+    const response = await this.fetchWithTimeout(
+      'https://places.googleapis.com/v1/places:autocomplete',
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': this.googleMapsApiKey,
+          'X-Goog-FieldMask':
+            'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text,suggestions.placePrediction.structuredFormat.mainText.text,suggestions.placePrediction.structuredFormat.secondaryText.text'
+        },
+        body: JSON.stringify(body)
       },
-      body: JSON.stringify(body)
-    });
+      MapsService.AUTOCOMPLETE_TIMEOUT_MS
+    );
+
+    if (!response) {
+      return {
+        status: 'TIMEOUT',
+        message: 'Google Places autocomplete timed out',
+        suggestions: []
+      };
+    }
 
     if (!response.ok) {
       return {
@@ -297,38 +369,37 @@ export class MapsService {
     }
 
     const countryCode = (input.countryCode ?? 'IN').toUpperCase();
-    const legacy = await this.autocompleteLegacy({
-      query: trimmed,
-      lat: input.lat,
-      lng: input.lng,
-      sessionToken: input.sessionToken,
-      countryCode
-    });
+    const [modern, legacy] = await Promise.all([
+      this.autocompleteNew({
+        query: trimmed,
+        lat: input.lat,
+        lng: input.lng,
+        sessionToken: input.sessionToken,
+        countryCode
+      }),
+      this.autocompleteLegacy({
+        query: trimmed,
+        lat: input.lat,
+        lng: input.lng,
+        sessionToken: input.sessionToken,
+        countryCode
+      })
+    ]);
 
-    if (legacy.suggestions.length > 0 || legacy.status === 'OK' || legacy.status === 'ZERO_RESULTS') {
-      return {
-        source: 'google',
-        keyConfigured: true,
-        status: legacy.status ?? 'UNKNOWN',
-        message: legacy.message,
-        suggestions: legacy.suggestions
-      };
-    }
-
-    const modern = await this.autocompleteNew({
-      query: trimmed,
-      lat: input.lat,
-      lng: input.lng,
-      sessionToken: input.sessionToken,
-      countryCode
-    });
+    const preferred =
+      modern.suggestions.length > 0 ? modern : legacy.suggestions.length > 0 ? legacy : modern;
+    const secondary = preferred === modern ? legacy : modern;
+    const mergedSuggestions = this.mergeAutocompleteSuggestions(
+      preferred.suggestions,
+      secondary.suggestions
+    );
 
     return {
       source: 'google',
       keyConfigured: true,
-      status: modern.status ?? legacy.status ?? 'UNKNOWN',
-      message: modern.message ?? legacy.message,
-      suggestions: modern.suggestions
+      status: preferred.status ?? secondary.status ?? 'UNKNOWN',
+      message: preferred.message ?? secondary.message,
+      suggestions: mergedSuggestions
     };
   }
 

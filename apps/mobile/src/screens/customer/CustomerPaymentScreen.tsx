@@ -266,11 +266,11 @@ export function CustomerPaymentScreen({ navigation }: Props) {
     return 'Done';
   }, [estimatedPrice, orderId, payableAmount, selectedMethod]);
 
-  const askForUpiConfirmation = () =>
+  const askForPaymentConfirmation = (title: string, message: string) =>
     new Promise<boolean>((resolve) => {
       Alert.alert(
-        'UPI Payment',
-        'Did the UPI app show payment success?',
+        title,
+        message,
         [
           {
             text: 'No',
@@ -300,7 +300,7 @@ export function CustomerPaymentScreen({ navigation }: Props) {
           ? 'UPI'
           : selectedMethod === 'CASH'
             ? 'WALLET'
-            : 'RAZORPAY';
+            : 'CASHFREE';
 
       if (isDirectToDriver && !resolvedDriverUpiId) {
         Alert.alert('Driver UPI unavailable', 'Driver UPI details are not available for this trip yet.');
@@ -310,7 +310,7 @@ export function CustomerPaymentScreen({ navigation }: Props) {
       const intent = await api.post('/payments/create-intent', {
         orderId,
         provider,
-        amount: provider === 'RAZORPAY' ? payableAmount : baseAmount,
+        amount: provider === 'CASHFREE' ? payableAmount : baseAmount,
         directPayToDriver: isDirectToDriver || undefined,
         directUpiVpa: isDirectToDriver ? resolvedDriverUpiId : undefined,
         directUpiName: isDirectToDriver ? driverDirectProfile.name : undefined,
@@ -328,7 +328,7 @@ export function CustomerPaymentScreen({ navigation }: Props) {
       }
 
       let success = true;
-      let providerReference = `PAY_${Date.now()}`;
+      let providerReference = String(intent.data?.providerRef ?? `PAY_${Date.now()}`);
 
       if (provider === 'UPI') {
         const upiIntentUrl =
@@ -341,9 +341,29 @@ export function CustomerPaymentScreen({ navigation }: Props) {
           }
         }
 
-        success = await askForUpiConfirmation();
+        success = await askForPaymentConfirmation(
+          'UPI Payment',
+          'Did the UPI app show payment success?'
+        );
         providerReference = `UPI_${Date.now()}`;
-      } else if (provider === 'RAZORPAY') {
+      } else if (provider === 'CASHFREE') {
+        const checkoutUrl = intent.data?.checkoutUrl as string | undefined;
+        if (checkoutUrl) {
+          const canOpen = await Linking.canOpenURL(checkoutUrl);
+          if (canOpen) {
+            await Linking.openURL(checkoutUrl);
+          }
+        } else {
+          Alert.alert(
+            'Payment Link Unavailable',
+            'Cashfree checkout link was not returned. Continue only if you completed payment outside the app.'
+          );
+        }
+
+        success = await askForPaymentConfirmation(
+          'Card Payment',
+          'Did Cashfree checkout show payment success?'
+        );
         providerReference = String(intent.data?.providerRef ?? providerReference);
       }
 
@@ -357,7 +377,7 @@ export function CustomerPaymentScreen({ navigation }: Props) {
       if (success) {
         Alert.alert(
           'Payment Complete',
-          provider === 'RAZORPAY'
+          provider === 'CASHFREE'
             ? `Payment confirmed. Card surcharge applied: INR ${cardSurchargeAmount.toFixed(2)}`
             : isDirectToDriver
               ? 'Payment confirmed directly to driver UPI.'

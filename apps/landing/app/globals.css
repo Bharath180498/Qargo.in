@@ -26,6 +26,8 @@ body {
   padding: 0;
   min-height: 100%;
   overflow-x: hidden;
+  background-color: #081227;
+  overscroll-behavior-y: auto;
 }
 
 body {
@@ -35,6 +37,7 @@ body {
     radial-gradient(circle at 12% -8%, rgba(24, 157, 255, 0.34), transparent 42%),
     radial-gradient(circle at 88% 6%, rgba(85, 116, 255, 0.3), transparent 38%),
     linear-gradient(176deg, #081227 0%, #0a1732 42%, #0d1c3f 100%);
+  overscroll-behavior: auto;
 }
 
 h1,
@@ -57,7 +60,6 @@ a {
   position: relative;
   min-height: 100vh;
   isolation: isolate;
-  overflow: clip;
   padding-bottom: 26px;
 }
 

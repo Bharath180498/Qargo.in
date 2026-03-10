@@ -102,6 +102,7 @@ Current live-provider readiness:
 - Cashfree provider: live verification call supported when `KYC_PROVIDER=cashfree` + Cashfree credentials are configured.
 - QuickeKYC provider: live verification call supported when `KYC_PROVIDER=quickekyc` + QuickeKYC credentials are configured.
 - Razorpay: live order creation + webhook verification supported with Razorpay keys.
+- Cashfree Payments: live order creation + webhook status updates supported with Cashfree client credentials.
 - UPI: intent deep-link flow supported with `UPI_PAYEE_VPA`.
 - E-way bill and insurance: external API passthrough supported when API URL/key are configured; otherwise mock fallback.
 
@@ -129,6 +130,7 @@ railway up --service backend --detach
    - Google Routes
    - Push (FCM/APNs/Expo path as required)
    - IDfy
+   - Cashfree payment checkout + webhooks
    - Razorpay webhooks
    - GST/e-way bill provider
    - Insurance provider

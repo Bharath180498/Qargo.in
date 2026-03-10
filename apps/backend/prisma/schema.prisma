@@ -61,6 +61,7 @@ enum TripStatus {
 
 enum PaymentProvider {
   RAZORPAY
+  CASHFREE
   STRIPE
   UPI
   WALLET

@@ -35,7 +35,10 @@ export default () => ({
     clientId: process.env.CASHFREE_CLIENT_ID ?? '',
     clientSecret: process.env.CASHFREE_CLIENT_SECRET ?? '',
     kycApiUrl: process.env.CASHFREE_KYC_API_URL ?? '',
-    apiVersion: process.env.CASHFREE_API_VERSION ?? '2023-08-01'
+    apiVersion: process.env.CASHFREE_API_VERSION ?? '2023-08-01',
+    paymentsApiUrl: process.env.CASHFREE_PAYMENTS_API_URL ?? 'https://api.cashfree.com/pg/orders',
+    webhookSecret: process.env.CASHFREE_WEBHOOK_SECRET ?? '',
+    paymentReturnUrl: process.env.CASHFREE_PAYMENT_RETURN_URL ?? ''
   },
   quickeKyc: {
     apiUrl: process.env.QUICKEKYC_API_URL ?? 'https://api.quickekyc.com/api/v1',

@@ -40,6 +40,9 @@
 - `GET /api/support/tickets/:ticketId?userId=`
 - `POST /api/support/tickets/:ticketId/messages`
 - `POST /api/payments/create-intent`
+- `POST /api/payments/confirm`
+- `POST /api/payments/webhooks/razorpay`
+- `POST /api/payments/webhooks/cashfree`
 - `POST /api/insurance/quote`
 - `POST /api/ewaybill/generate`
 

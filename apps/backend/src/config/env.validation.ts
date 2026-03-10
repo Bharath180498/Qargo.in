@@ -74,6 +74,18 @@ class EnvSchema {
 
   @IsOptional()
   @IsString()
+  CASHFREE_PAYMENTS_API_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  CASHFREE_WEBHOOK_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  CASHFREE_PAYMENT_RETURN_URL?: string;
+
+  @IsOptional()
+  @IsString()
   QUICKEKYC_API_URL?: string;
 
   @IsOptional()

@@ -6,6 +6,28 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
 
+interface CashfreeWebhookPayload {
+  type?: string;
+  order_id?: string;
+  orderId?: string;
+  order_status?: string;
+  payment_status?: string;
+  txStatus?: string;
+  data?: {
+    order?: {
+      order_id?: string;
+      orderId?: string;
+      order_status?: string;
+    };
+    payment?: {
+      order_id?: string;
+      payment_status?: string;
+      cf_payment_id?: string | number;
+      payment_id?: string;
+    };
+  };
+}
+
 @Injectable()
 export class PaymentsService {
   private static readonly CARD_SURCHARGE_PERCENT = 2.5;
@@ -27,6 +49,30 @@ export class PaymentsService {
     return this.configService.get<string>('razorpay.webhookSecret') ?? '';
   }
 
+  private get cashfreeClientId() {
+    return this.configService.get<string>('cashfree.clientId') ?? '';
+  }
+
+  private get cashfreeClientSecret() {
+    return this.configService.get<string>('cashfree.clientSecret') ?? '';
+  }
+
+  private get cashfreeApiVersion() {
+    return this.configService.get<string>('cashfree.apiVersion') ?? '2023-08-01';
+  }
+
+  private get cashfreePaymentsApiUrl() {
+    return this.configService.get<string>('cashfree.paymentsApiUrl') ?? 'https://api.cashfree.com/pg/orders';
+  }
+
+  private get cashfreeWebhookSecret() {
+    return this.configService.get<string>('cashfree.webhookSecret') ?? '';
+  }
+
+  private get cashfreePaymentReturnUrl() {
+    return this.configService.get<string>('cashfree.paymentReturnUrl') ?? '';
+  }
+
   private get upiPayeeVpa() {
     return this.configService.get<string>('upi.payeeVpa') ?? '';
   }
@@ -45,7 +91,9 @@ export class PaymentsService {
 
   private pricingBreakdown(provider: PaymentProvider, baseAmount: number) {
     const surchargePercent =
-      provider === PaymentProvider.RAZORPAY ? PaymentsService.CARD_SURCHARGE_PERCENT : 0;
+      provider === PaymentProvider.RAZORPAY || provider === PaymentProvider.CASHFREE
+        ? PaymentsService.CARD_SURCHARGE_PERCENT
+        : 0;
     const surchargeAmount = this.roundCurrency((baseAmount * surchargePercent) / 100);
     const totalAmount = this.roundCurrency(baseAmount + surchargeAmount);
 
@@ -66,6 +114,17 @@ export class PaymentsService {
     return timingSafeEqual(first, second);
   }
 
+  private normalizePhone(input?: string | null) {
+    const digits = (input ?? '').replace(/\D/g, '');
+    if (!digits) {
+      return '9999999999';
+    }
+    if (digits.length >= 10) {
+      return digits.slice(-10);
+    }
+    return digits.padStart(10, '0');
+  }
+
   private resolveWebhookProviderRef(payload: {
     providerRef?: string;
     payload?: {
@@ -77,6 +136,32 @@ export class PaymentsService {
     };
   }) {
     return payload.providerRef ?? payload.payload?.payment?.entity?.order_id;
+  }
+
+  private extractString(
+    payload: Record<string, unknown>,
+    path: string
+  ) {
+    const segments = path.split('.');
+    let cursor: unknown = payload;
+
+    for (const segment of segments) {
+      if (!cursor || typeof cursor !== 'object' || !(segment in cursor)) {
+        return undefined;
+      }
+
+      cursor = (cursor as Record<string, unknown>)[segment];
+    }
+
+    if (typeof cursor === 'string' && cursor.trim()) {
+      return cursor.trim();
+    }
+
+    if (typeof cursor === 'number') {
+      return String(cursor);
+    }
+
+    return undefined;
   }
 
   private verifyRazorpaySignature(
@@ -95,6 +180,36 @@ export class PaymentsService {
       .digest('hex');
 
     return this.safeEqual(expected, signature);
+  }
+
+  private verifyCashfreeSignature(
+    payload: Record<string, unknown>,
+    signature?: string,
+    timestamp?: string
+  ) {
+    if (!this.cashfreeWebhookSecret) {
+      return true;
+    }
+
+    if (!signature) {
+      return false;
+    }
+
+    const normalized = signature.replace(/^sha256=/i, '').trim();
+    const body = JSON.stringify(payload);
+
+    const candidates = [
+      createHmac('sha256', this.cashfreeWebhookSecret).update(body).digest('hex'),
+      createHmac('sha256', this.cashfreeWebhookSecret).update(body).digest('base64')
+    ];
+
+    if (timestamp?.trim()) {
+      const signedPayload = `${timestamp.trim()}.${body}`;
+      candidates.push(createHmac('sha256', this.cashfreeWebhookSecret).update(signedPayload).digest('hex'));
+      candidates.push(createHmac('sha256', this.cashfreeWebhookSecret).update(signedPayload).digest('base64'));
+    }
+
+    return candidates.some((candidate) => this.safeEqual(candidate, normalized));
   }
 
   private buildUpiIntent(
@@ -120,6 +235,16 @@ export class PaymentsService {
     });
 
     return `upi://pay?${params.toString()}`;
+  }
+
+  private buildCashfreeHostedCheckoutUrl(paymentSessionId: string) {
+    const normalized = this.cashfreePaymentsApiUrl.toLowerCase();
+    const isTest = normalized.includes('sandbox') || normalized.includes('test');
+    const base = isTest
+      ? 'https://payments-test.cashfree.com/order/#'
+      : 'https://payments.cashfree.com/order/#';
+
+    return `${base}${paymentSessionId}`;
   }
 
   private async createRazorpayOrder(input: { orderId: string; amount: number }) {
@@ -182,10 +307,112 @@ export class PaymentsService {
     }
   }
 
+  private async createCashfreeOrder(input: {
+    orderId: string;
+    paymentId: string;
+    amount: number;
+    customerId: string;
+    customerName?: string;
+    customerPhone?: string;
+    customerEmail?: string | null;
+  }) {
+    if (!this.cashfreeClientId || !this.cashfreeClientSecret) {
+      return {
+        mode: 'mock' as const,
+        providerRef: `cf_order_${Date.now()}`,
+        clientSecret: `cf_session_${Date.now()}`,
+        checkoutUrl: undefined,
+        reason: 'Cashfree credentials missing'
+      };
+    }
+
+    const providerOrderId = `qargo_${input.orderId.slice(0, 10)}_${Date.now()}`;
+    const customerPhone = this.normalizePhone(input.customerPhone);
+    const customerName = (input.customerName ?? '').trim() || 'Qargo Customer';
+    const customerEmail =
+      (input.customerEmail ?? '').trim() || `${input.customerId.slice(0, 12)}@qargo.local`;
+
+    const orderMeta = this.cashfreePaymentReturnUrl.trim()
+      ? {
+          return_url: this.cashfreePaymentReturnUrl.trim()
+        }
+      : undefined;
+
+    try {
+      const response = await fetch(this.cashfreePaymentsApiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-client-id': this.cashfreeClientId,
+          'x-client-secret': this.cashfreeClientSecret,
+          'x-api-version': this.cashfreeApiVersion
+        },
+        body: JSON.stringify({
+          order_id: providerOrderId,
+          order_amount: this.roundCurrency(input.amount),
+          order_currency: 'INR',
+          order_note: `Qargo Order ${input.orderId.slice(0, 8)}`,
+          customer_details: {
+            customer_id: input.customerId,
+            customer_name: customerName,
+            customer_phone: customerPhone,
+            customer_email: customerEmail
+          },
+          ...(orderMeta ? { order_meta: orderMeta } : {})
+        })
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      const orderId =
+        this.extractString(payload, 'order_id') ??
+        this.extractString(payload, 'data.order.order_id') ??
+        providerOrderId;
+      const paymentSessionId =
+        this.extractString(payload, 'payment_session_id') ??
+        this.extractString(payload, 'order_token') ??
+        this.extractString(payload, 'data.payment_session_id');
+      const explicitCheckoutUrl =
+        this.extractString(payload, 'payment_link') ??
+        this.extractString(payload, 'data.payment_link') ??
+        this.extractString(payload, 'order_meta.payment_link') ??
+        this.extractString(payload, 'order_meta.payment_url');
+      const checkoutUrl =
+        explicitCheckoutUrl ??
+        (paymentSessionId ? this.buildCashfreeHostedCheckoutUrl(paymentSessionId) : undefined);
+
+      if (!response.ok) {
+        return {
+          mode: 'mock' as const,
+          providerRef: orderId,
+          clientSecret: paymentSessionId,
+          checkoutUrl,
+          reason: this.extractString(payload, 'message') ?? `Cashfree error ${response.status}`
+        };
+      }
+
+      return {
+        mode: 'live' as const,
+        providerRef: orderId,
+        clientSecret: paymentSessionId,
+        checkoutUrl,
+        reason: undefined
+      };
+    } catch {
+      return {
+        mode: 'mock' as const,
+        providerRef: providerOrderId,
+        clientSecret: `cf_session_${Date.now()}`,
+        checkoutUrl: undefined,
+        reason: 'Cashfree request failed'
+      };
+    }
+  }
+
   async createIntent(payload: CreatePaymentDto) {
     const order = await this.prisma.order.findUnique({
       where: { id: payload.orderId },
       include: {
+        customer: true,
         trip: {
           include: {
             driver: {
@@ -253,6 +480,39 @@ export class PaymentsService {
         currency: 'INR',
         mode: razorpayOrder.mode,
         reason: razorpayOrder.reason,
+        ...breakdown
+      };
+    }
+
+    if (payload.provider === PaymentProvider.CASHFREE) {
+      const cashfreeOrder = await this.createCashfreeOrder({
+        orderId: payload.orderId,
+        paymentId: payment.id,
+        amount: breakdown.totalAmount,
+        customerId: order.customerId,
+        customerName: order.customer?.name,
+        customerPhone: order.customer?.phone,
+        customerEmail: order.customer?.email
+      });
+
+      const updated = await this.prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+          providerRef: cashfreeOrder.providerRef
+        }
+      });
+
+      return {
+        paymentId: updated.id,
+        provider: updated.provider,
+        providerRef: updated.providerRef,
+        clientSecret: cashfreeOrder.clientSecret,
+        checkoutUrl: cashfreeOrder.checkoutUrl,
+        amount: Number(updated.amount),
+        amountPaise: this.toPaise(Number(updated.amount)),
+        currency: 'INR',
+        mode: cashfreeOrder.mode,
+        reason: cashfreeOrder.reason,
         ...breakdown
       };
     }
@@ -348,21 +608,24 @@ export class PaymentsService {
   }
 
   defaultProvider() {
-    return PaymentProvider.RAZORPAY;
+    return PaymentProvider.CASHFREE;
   }
 
-  async handleRazorpayWebhook(payload: {
-    event: string;
-    providerRef?: string;
-    payload?: {
-      payment?: {
-        entity?: {
-          order_id?: string;
+  async handleRazorpayWebhook(
+    payload: {
+      event: string;
+      providerRef?: string;
+      payload?: {
+        payment?: {
+          entity?: {
+            order_id?: string;
+          };
         };
       };
-    };
-    success?: boolean;
-  }, signature?: string) {
+      success?: boolean;
+    },
+    signature?: string
+  ) {
     if (!this.verifyRazorpaySignature(payload as Record<string, unknown>, signature)) {
       return {
         received: true,
@@ -417,6 +680,101 @@ export class PaymentsService {
       updated: true,
       paymentId: updated.id,
       status: updated.status
+    };
+  }
+
+  async handleCashfreeWebhook(
+    payload: CashfreeWebhookPayload,
+    signature?: string,
+    timestamp?: string
+  ) {
+    if (!this.verifyCashfreeSignature(payload as Record<string, unknown>, signature, timestamp)) {
+      return {
+        received: true,
+        updated: false,
+        reason: 'invalid webhook signature'
+      };
+    }
+
+    const providerRef =
+      payload.order_id ??
+      payload.orderId ??
+      payload.data?.order?.order_id ??
+      payload.data?.order?.orderId ??
+      payload.data?.payment?.order_id;
+
+    if (!providerRef) {
+      return {
+        received: true,
+        updated: false,
+        reason: 'providerRef missing'
+      };
+    }
+
+    const payment = await this.prisma.payment.findFirst({
+      where: {
+        provider: PaymentProvider.CASHFREE,
+        providerRef
+      }
+    });
+
+    if (!payment) {
+      return {
+        received: true,
+        updated: false,
+        reason: 'payment not found'
+      };
+    }
+
+    const rawStatus = String(
+      payload.data?.payment?.payment_status ??
+        payload.payment_status ??
+        payload.txStatus ??
+        payload.data?.order?.order_status ??
+        payload.order_status ??
+        payload.type ??
+        ''
+    )
+      .trim()
+      .toUpperCase();
+
+    const successStatuses = new Set(['SUCCESS', 'PAID', 'CAPTURED', 'COMPLETED', 'CHARGED']);
+    const failureStatuses = new Set(['FAILED', 'FAILURE', 'CANCELLED', 'USER_DROPPED', 'DECLINED']);
+    const pendingStatuses = new Set(['PENDING', 'NOT_ATTEMPTED', 'ACTIVE', 'INITIALIZED']);
+
+    let nextStatus: PaymentStatus | undefined;
+
+    if (successStatuses.has(rawStatus) || rawStatus.includes('SUCCESS')) {
+      nextStatus = PaymentStatus.CAPTURED;
+    } else if (failureStatuses.has(rawStatus) || rawStatus.includes('FAIL')) {
+      nextStatus = PaymentStatus.FAILED;
+    } else if (pendingStatuses.has(rawStatus) || rawStatus.includes('PENDING')) {
+      nextStatus = PaymentStatus.PENDING;
+    }
+
+    if (!nextStatus || nextStatus === PaymentStatus.PENDING) {
+      return {
+        received: true,
+        updated: false,
+        reason: `status ${rawStatus || 'UNKNOWN'} ignored`,
+        providerRef
+      };
+    }
+
+    const updated = await this.prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: nextStatus
+      }
+    });
+
+    return {
+      received: true,
+      updated: true,
+      paymentId: updated.id,
+      status: updated.status,
+      providerRef,
+      rawStatus
     };
   }
 }

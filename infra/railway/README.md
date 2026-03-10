@@ -40,6 +40,8 @@ It also sets launch-critical vars including:
 
 - `ADMIN_PASSCODE`
 - `SUPPORT_PHONE`
+- `CASHFREE_PAYMENTS_API_URL`
+- `CASHFREE_WEBHOOK_SECRET`
 
 ## Deploy
 

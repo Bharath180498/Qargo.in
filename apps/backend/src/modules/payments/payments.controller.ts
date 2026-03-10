@@ -35,4 +35,38 @@ export class PaymentsController {
   ) {
     return this.paymentsService.handleRazorpayWebhook(payload, signature);
   }
+
+  @Post('webhooks/cashfree')
+  cashfreeWebhook(
+    @Body() payload: {
+      type?: string;
+      order_id?: string;
+      orderId?: string;
+      order_status?: string;
+      payment_status?: string;
+      txStatus?: string;
+      data?: {
+        order?: {
+          order_id?: string;
+          orderId?: string;
+          order_status?: string;
+        };
+        payment?: {
+          order_id?: string;
+          payment_status?: string;
+          cf_payment_id?: string | number;
+          payment_id?: string;
+        };
+      };
+    },
+    @Headers('x-webhook-signature') signature?: string,
+    @Headers('x-cf-signature') cfSignature?: string,
+    @Headers('x-webhook-timestamp') timestamp?: string
+  ) {
+    return this.paymentsService.handleCashfreeWebhook(
+      payload,
+      signature ?? cfSignature,
+      timestamp
+    );
+  }
 }

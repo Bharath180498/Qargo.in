@@ -71,6 +71,7 @@ For launch access and support:
 
 - set `ADMIN_PASSCODE` to your secure dashboard passcode
 - set `SUPPORT_PHONE` to your active customer support number
+- set `CASHFREE_CLIENT_ID`, `CASHFREE_CLIENT_SECRET`, and `CASHFREE_WEBHOOK_SECRET` for live card checkout
 
 ## 6. Deploy
 
@@ -104,7 +105,7 @@ Then rebuild/reload app.
 ## 9. Day-2 Checklist
 
 - Add custom domains for both services
-- Add real provider keys (Razorpay/Stripe/FCM/GSTN/EWay Bill)
+- Add real provider keys (Cashfree/Razorpay/Stripe/FCM/GSTN/EWay Bill)
 - Configure Railway metrics/alerts
 - Enable backup strategy for Postgres
 - Test rollback by redeploying previous healthy deployment

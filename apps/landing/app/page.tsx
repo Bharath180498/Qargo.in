@@ -437,7 +437,7 @@ export default function LandingPage() {
 
         <section className="mega-legal" aria-label="Registered office information">
           <h4>Registered Office:</h4>
-          <p>© {new Date().getFullYear()} QARGO Logistics Private Limited.</p>
+          <p>© {new Date().getFullYear()} Sarathi India Logistics Private Limited.</p>
           <p>Address: Aradeshanahalli gate, 151, Doddaballapura Main Rd, Suradhenupura, Bengaluru, Karnataka 562110</p>
           <p>CIN: U00000KA2026PTC000000</p>
           <p>Email: admin@qargo.in · Phone: 85169 96169</p>

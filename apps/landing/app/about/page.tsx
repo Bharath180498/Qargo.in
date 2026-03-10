@@ -91,7 +91,7 @@ export default function AboutPage() {
 
       <footer className="footer">
         <span>QARGO</span>
-        <span>Copyright {new Date().getFullYear()} QARGO Logistics</span>
+        <span>Copyright {new Date().getFullYear()} Sarathi India Logistics Private Limited</span>
       </footer>
     </main>
   );

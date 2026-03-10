@@ -204,7 +204,7 @@ export default function LandingPage() {
             <p className="brand-tag">simply deliver</p>
           </div>
         </div>
-        <p>Copyright {new Date().getFullYear()} QARGO Logistics</p>
+        <p>Copyright {new Date().getFullYear()} Sarathi India Logistics Private Limited</p>
       </footer>
     </main>
   );

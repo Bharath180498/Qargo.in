@@ -11,30 +11,33 @@ ROUTE_PROVIDER_VALUE="${ROUTE_PROVIDER:-mock}"
 KYC_PROVIDER_VALUE="${KYC_PROVIDER:-mock}"
 PUSH_PROVIDER_VALUE="${PUSH_PROVIDER:-mock}"
 OTP_PROVIDER_VALUE="${OTP_PROVIDER:-mock}"
-IDFY_API_KEY_INPUT="${IDFY_API_KEY:-replace-me}"
-IDFY_API_URL_INPUT="${IDFY_API_URL:-replace-me}"
-IDFY_ACCOUNT_ID_INPUT="${IDFY_ACCOUNT_ID:-replace-me}"
-CASHFREE_CLIENT_ID_INPUT="${CASHFREE_CLIENT_ID:-replace-me}"
-CASHFREE_CLIENT_SECRET_INPUT="${CASHFREE_CLIENT_SECRET:-replace-me}"
-CASHFREE_KYC_API_URL_INPUT="${CASHFREE_KYC_API_URL:-replace-me}"
+IDFY_API_KEY_INPUT="${IDFY_API_KEY:-}"
+IDFY_API_URL_INPUT="${IDFY_API_URL:-https://api.idfy.com/v3/tasks}"
+IDFY_ACCOUNT_ID_INPUT="${IDFY_ACCOUNT_ID:-}"
+CASHFREE_CLIENT_ID_INPUT="${CASHFREE_CLIENT_ID:-}"
+CASHFREE_CLIENT_SECRET_INPUT="${CASHFREE_CLIENT_SECRET:-}"
+CASHFREE_KYC_API_URL_INPUT="${CASHFREE_KYC_API_URL:-https://api.cashfree.com/verification/v1}"
 CASHFREE_API_VERSION_INPUT="${CASHFREE_API_VERSION:-2023-08-01}"
+CASHFREE_PAYMENTS_API_URL_INPUT="${CASHFREE_PAYMENTS_API_URL:-https://api.cashfree.com/pg/orders}"
+CASHFREE_WEBHOOK_SECRET_INPUT="${CASHFREE_WEBHOOK_SECRET:-}"
+CASHFREE_PAYMENT_RETURN_URL_INPUT="${CASHFREE_PAYMENT_RETURN_URL:-}"
 QUICKEKYC_API_URL_INPUT="${QUICKEKYC_API_URL:-https://api.quickekyc.com/api/v1}"
-QUICKEKYC_API_KEY_INPUT="${QUICKEKYC_API_KEY:-replace-me}"
+QUICKEKYC_API_KEY_INPUT="${QUICKEKYC_API_KEY:-}"
 QUICKEKYC_API_KEY_HEADER_INPUT="${QUICKEKYC_API_KEY_HEADER:-x-api-key}"
 QUICKEKYC_USE_AUTHORIZATION_HEADER_INPUT="${QUICKEKYC_USE_AUTHORIZATION_HEADER:-false}"
-FCM_SERVER_KEY_INPUT="${FCM_SERVER_KEY:-replace-me}"
-TWILIO_ACCOUNT_SID_INPUT="${TWILIO_ACCOUNT_SID:-replace-me}"
-TWILIO_AUTH_TOKEN_INPUT="${TWILIO_AUTH_TOKEN:-replace-me}"
-TWILIO_MESSAGING_SERVICE_SID_INPUT="${TWILIO_MESSAGING_SERVICE_SID:-replace-me}"
-TWILIO_FROM_NUMBER_INPUT="${TWILIO_FROM_NUMBER:-replace-me}"
-RAZORPAY_KEY_ID_INPUT="${RAZORPAY_KEY_ID:-replace-me}"
-RAZORPAY_KEY_SECRET_INPUT="${RAZORPAY_KEY_SECRET:-replace-me}"
-RAZORPAY_WEBHOOK_SECRET_INPUT="${RAZORPAY_WEBHOOK_SECRET:-replace-me}"
-UPI_PAYEE_VPA_INPUT="${UPI_PAYEE_VPA:-replace-me}"
+FCM_SERVER_KEY_INPUT="${FCM_SERVER_KEY:-}"
+TWILIO_ACCOUNT_SID_INPUT="${TWILIO_ACCOUNT_SID:-}"
+TWILIO_AUTH_TOKEN_INPUT="${TWILIO_AUTH_TOKEN:-}"
+TWILIO_MESSAGING_SERVICE_SID_INPUT="${TWILIO_MESSAGING_SERVICE_SID:-}"
+TWILIO_FROM_NUMBER_INPUT="${TWILIO_FROM_NUMBER:-}"
+RAZORPAY_KEY_ID_INPUT="${RAZORPAY_KEY_ID:-}"
+RAZORPAY_KEY_SECRET_INPUT="${RAZORPAY_KEY_SECRET:-}"
+RAZORPAY_WEBHOOK_SECRET_INPUT="${RAZORPAY_WEBHOOK_SECRET:-}"
+UPI_PAYEE_VPA_INPUT="${UPI_PAYEE_VPA:-}"
 UPI_PAYEE_NAME_INPUT="${UPI_PAYEE_NAME:-Qargo Logistics}"
-EWAY_BILL_API_KEY_INPUT="${EWAY_BILL_API_KEY:-replace-me}"
-INSURANCE_API_URL_INPUT="${INSURANCE_API_URL:-replace-me}"
-INSURANCE_API_KEY_INPUT="${INSURANCE_API_KEY:-replace-me}"
+EWAY_BILL_API_KEY_INPUT="${EWAY_BILL_API_KEY:-}"
+INSURANCE_API_URL_INPUT="${INSURANCE_API_URL:-}"
+INSURANCE_API_KEY_INPUT="${INSURANCE_API_KEY:-}"
 ADMIN_PASSCODE_INPUT="${ADMIN_PASSCODE:-change-me-admin-passcode}"
 SUPPORT_PHONE_INPUT="${SUPPORT_PHONE:-9844259899}"
 SKIP_ADMIN="false"
@@ -61,6 +64,9 @@ Usage:
     [--cashfree-client-secret your-client-secret] \
     [--cashfree-kyc-api-url https://api.cashfree.com/verification/...] \
     [--cashfree-api-version 2023-08-01] \
+    [--cashfree-payments-api-url https://api.cashfree.com/pg/orders] \
+    [--cashfree-webhook-secret your-webhook-secret] \
+    [--cashfree-payment-return-url https://your-app.example/payment-return] \
     [--quickekyc-api-url https://api.quickekyc.com/api/v1] \
     [--quickekyc-api-key your-key] \
     [--quickekyc-api-key-header x-api-key] \
@@ -104,6 +110,42 @@ generate_secret() {
     openssl rand -hex 32
   else
     date +%s | shasum | awk '{print $1}'
+  fi
+}
+
+is_placeholder() {
+  local value="${1:-}"
+  local lowered
+  lowered="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
+    ""|replace-me|changeme|change-me|change-me-admin-passcode|your-key|your-secret|xxxx)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+validate_choice() {
+  local key="$1"
+  local value="$2"
+  shift 2
+  for option in "$@"; do
+    if [[ "$value" == "$option" ]]; then
+      return 0
+    fi
+  done
+  echo "Invalid value for $key: '$value'. Allowed: $*" >&2
+  exit 1
+}
+
+require_real_value() {
+  local key="$1"
+  local value="$2"
+  if is_placeholder "$value"; then
+    echo "$key is required and cannot be empty or placeholder when this provider is enabled." >&2
+    exit 1
   fi
 }
 
@@ -179,6 +221,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cashfree-api-version)
       CASHFREE_API_VERSION_INPUT="$2"
+      shift 2
+      ;;
+    --cashfree-payments-api-url)
+      CASHFREE_PAYMENTS_API_URL_INPUT="$2"
+      shift 2
+      ;;
+    --cashfree-webhook-secret)
+      CASHFREE_WEBHOOK_SECRET_INPUT="$2"
+      shift 2
+      ;;
+    --cashfree-payment-return-url)
+      CASHFREE_PAYMENT_RETURN_URL_INPUT="$2"
       shift 2
       ;;
     --quickekyc-api-url)
@@ -284,17 +338,83 @@ fi
 set_var() {
   local service="$1"
   local assignment="$2"
+  local max_attempts="${RAILWAY_MAX_RETRIES:-4}"
+  local delay_seconds="${RAILWAY_RETRY_DELAY_SECONDS:-3}"
+  local attempt=1
 
-  if ! railway variable set "$assignment" --service "$service" --skip-deploys >/dev/null; then
-    echo
-    echo "Failed to set variable on service '$service'." >&2
-    echo "Check available services with:" >&2
-    echo "  railway service status --all" >&2
-    echo "Then rerun with explicit names, e.g.:" >&2
-    echo "  npm run railway:configure-vars -- --backend-service <name> --postgres-service <name> --redis-service <name>" >&2
-    exit 1
-  fi
+  while (( attempt <= max_attempts )); do
+    if railway variable set "$assignment" --service "$service" --skip-deploys >/dev/null; then
+      return 0
+    fi
+
+    if (( attempt < max_attempts )); then
+      echo "Retrying Railway variable set (attempt $attempt/$max_attempts failed). Waiting ${delay_seconds}s..." >&2
+      sleep "$delay_seconds"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  echo
+  echo "Failed to set variable on service '$service' after $max_attempts attempts." >&2
+  echo "Check connectivity and service names:" >&2
+  echo "  railway status" >&2
+  echo "  railway service status --all" >&2
+  echo "Then rerun with explicit names, e.g.:" >&2
+  echo "  npm run railway:configure-vars -- --backend-service <name> --postgres-service <name> --redis-service <name>" >&2
+  exit 1
 }
+
+set_var_if_real() {
+  local service="$1"
+  local key="$2"
+  local value="$3"
+  if is_placeholder "$value"; then
+    echo "Skipping $key (empty or placeholder)."
+    return 0
+  fi
+  set_var "$service" "$key=$value"
+}
+
+validate_choice "ROUTE_PROVIDER" "$ROUTE_PROVIDER_VALUE" "mock" "google"
+validate_choice "KYC_PROVIDER" "$KYC_PROVIDER_VALUE" "mock" "idfy" "cashfree" "quickekyc"
+validate_choice "PUSH_PROVIDER" "$PUSH_PROVIDER_VALUE" "mock" "fcm"
+validate_choice "OTP_PROVIDER" "$OTP_PROVIDER_VALUE" "mock" "twilio"
+
+if [[ "$ROUTE_PROVIDER_VALUE" == "google" ]]; then
+  require_real_value "GOOGLE_MAPS_API_KEY" "$GOOGLE_MAPS_API_KEY_INPUT"
+fi
+
+if [[ "$KYC_PROVIDER_VALUE" == "idfy" ]]; then
+  require_real_value "IDFY_API_KEY" "$IDFY_API_KEY_INPUT"
+  require_real_value "IDFY_API_URL" "$IDFY_API_URL_INPUT"
+  require_real_value "IDFY_ACCOUNT_ID" "$IDFY_ACCOUNT_ID_INPUT"
+fi
+
+if [[ "$KYC_PROVIDER_VALUE" == "cashfree" ]]; then
+  require_real_value "CASHFREE_CLIENT_ID" "$CASHFREE_CLIENT_ID_INPUT"
+  require_real_value "CASHFREE_CLIENT_SECRET" "$CASHFREE_CLIENT_SECRET_INPUT"
+  require_real_value "CASHFREE_KYC_API_URL" "$CASHFREE_KYC_API_URL_INPUT"
+fi
+
+if [[ "$KYC_PROVIDER_VALUE" == "quickekyc" ]]; then
+  require_real_value "QUICKEKYC_API_KEY" "$QUICKEKYC_API_KEY_INPUT"
+fi
+
+if [[ "$PUSH_PROVIDER_VALUE" == "fcm" ]]; then
+  require_real_value "FCM_SERVER_KEY" "$FCM_SERVER_KEY_INPUT"
+fi
+
+if [[ "$OTP_PROVIDER_VALUE" == "twilio" ]]; then
+  require_real_value "TWILIO_ACCOUNT_SID" "$TWILIO_ACCOUNT_SID_INPUT"
+  require_real_value "TWILIO_AUTH_TOKEN" "$TWILIO_AUTH_TOKEN_INPUT"
+  require_real_value "TWILIO_MESSAGING_SERVICE_SID" "$TWILIO_MESSAGING_SERVICE_SID_INPUT"
+  require_real_value "TWILIO_FROM_NUMBER" "$TWILIO_FROM_NUMBER_INPUT"
+fi
+
+if is_placeholder "$ADMIN_PASSCODE_INPUT"; then
+  echo "ADMIN_PASSCODE is required and cannot be empty or placeholder." >&2
+  exit 1
+fi
 
 db_ref="\${{${POSTGRES_SERVICE}.DATABASE_URL}}"
 redis_ref="\${{${REDIS_SERVICE}.REDIS_URL}}"
@@ -318,39 +438,36 @@ set_var "$BACKEND_SERVICE" "OTP_FIXED_CODE=123456"
 set_var "$BACKEND_SERVICE" "DISPATCH_RADIUS_KM=8"
 set_var "$BACKEND_SERVICE" "WAITING_RATE_PER_MINUTE=3"
 set_var "$BACKEND_SERVICE" "BASE_FARE_PER_KM=14"
-set_var "$BACKEND_SERVICE" "GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY_INPUT:-replace-me}"
-set_var "$BACKEND_SERVICE" "IDFY_API_KEY=$IDFY_API_KEY_INPUT"
-set_var "$BACKEND_SERVICE" "IDFY_API_URL=$IDFY_API_URL_INPUT"
-set_var "$BACKEND_SERVICE" "IDFY_ACCOUNT_ID=$IDFY_ACCOUNT_ID_INPUT"
-set_var "$BACKEND_SERVICE" "CASHFREE_CLIENT_ID=$CASHFREE_CLIENT_ID_INPUT"
-set_var "$BACKEND_SERVICE" "CASHFREE_CLIENT_SECRET=$CASHFREE_CLIENT_SECRET_INPUT"
-set_var "$BACKEND_SERVICE" "CASHFREE_KYC_API_URL=$CASHFREE_KYC_API_URL_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "GOOGLE_MAPS_API_KEY" "$GOOGLE_MAPS_API_KEY_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "IDFY_API_KEY" "$IDFY_API_KEY_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "IDFY_API_URL" "$IDFY_API_URL_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "IDFY_ACCOUNT_ID" "$IDFY_ACCOUNT_ID_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "CASHFREE_CLIENT_ID" "$CASHFREE_CLIENT_ID_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "CASHFREE_CLIENT_SECRET" "$CASHFREE_CLIENT_SECRET_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "CASHFREE_KYC_API_URL" "$CASHFREE_KYC_API_URL_INPUT"
 set_var "$BACKEND_SERVICE" "CASHFREE_API_VERSION=$CASHFREE_API_VERSION_INPUT"
-set_var "$BACKEND_SERVICE" "QUICKEKYC_API_URL=$QUICKEKYC_API_URL_INPUT"
-set_var "$BACKEND_SERVICE" "QUICKEKYC_API_KEY=$QUICKEKYC_API_KEY_INPUT"
+set_var "$BACKEND_SERVICE" "CASHFREE_PAYMENTS_API_URL=$CASHFREE_PAYMENTS_API_URL_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "CASHFREE_WEBHOOK_SECRET" "$CASHFREE_WEBHOOK_SECRET_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "CASHFREE_PAYMENT_RETURN_URL" "$CASHFREE_PAYMENT_RETURN_URL_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "QUICKEKYC_API_URL" "$QUICKEKYC_API_URL_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "QUICKEKYC_API_KEY" "$QUICKEKYC_API_KEY_INPUT"
 set_var "$BACKEND_SERVICE" "QUICKEKYC_API_KEY_HEADER=$QUICKEKYC_API_KEY_HEADER_INPUT"
 set_var "$BACKEND_SERVICE" "QUICKEKYC_USE_AUTHORIZATION_HEADER=$QUICKEKYC_USE_AUTHORIZATION_HEADER_INPUT"
-set_var "$BACKEND_SERVICE" "FCM_SERVER_KEY=$FCM_SERVER_KEY_INPUT"
-set_var "$BACKEND_SERVICE" "TWILIO_ACCOUNT_SID=$TWILIO_ACCOUNT_SID_INPUT"
-set_var "$BACKEND_SERVICE" "TWILIO_AUTH_TOKEN=$TWILIO_AUTH_TOKEN_INPUT"
-set_var "$BACKEND_SERVICE" "TWILIO_MESSAGING_SERVICE_SID=$TWILIO_MESSAGING_SERVICE_SID_INPUT"
-set_var "$BACKEND_SERVICE" "TWILIO_FROM_NUMBER=$TWILIO_FROM_NUMBER_INPUT"
-set_var "$BACKEND_SERVICE" "S3_ENDPOINT=replace-me"
-set_var "$BACKEND_SERVICE" "S3_REGION=ap-south-1"
-set_var "$BACKEND_SERVICE" "S3_BUCKET=replace-me"
-set_var "$BACKEND_SERVICE" "S3_ACCESS_KEY_ID=replace-me"
-set_var "$BACKEND_SERVICE" "S3_SECRET_ACCESS_KEY=replace-me"
-set_var "$BACKEND_SERVICE" "RAZORPAY_KEY_ID=$RAZORPAY_KEY_ID_INPUT"
-set_var "$BACKEND_SERVICE" "RAZORPAY_KEY_SECRET=$RAZORPAY_KEY_SECRET_INPUT"
-set_var "$BACKEND_SERVICE" "RAZORPAY_WEBHOOK_SECRET=$RAZORPAY_WEBHOOK_SECRET_INPUT"
-set_var "$BACKEND_SERVICE" "UPI_PAYEE_VPA=$UPI_PAYEE_VPA_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "FCM_SERVER_KEY" "$FCM_SERVER_KEY_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "TWILIO_ACCOUNT_SID" "$TWILIO_ACCOUNT_SID_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "TWILIO_AUTH_TOKEN" "$TWILIO_AUTH_TOKEN_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "TWILIO_MESSAGING_SERVICE_SID" "$TWILIO_MESSAGING_SERVICE_SID_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "TWILIO_FROM_NUMBER" "$TWILIO_FROM_NUMBER_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "RAZORPAY_KEY_ID" "$RAZORPAY_KEY_ID_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "RAZORPAY_KEY_SECRET" "$RAZORPAY_KEY_SECRET_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "RAZORPAY_WEBHOOK_SECRET" "$RAZORPAY_WEBHOOK_SECRET_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "UPI_PAYEE_VPA" "$UPI_PAYEE_VPA_INPUT"
 set_var "$BACKEND_SERVICE" "UPI_PAYEE_NAME=$UPI_PAYEE_NAME_INPUT"
-set_var "$BACKEND_SERVICE" "STRIPE_SECRET_KEY=replace-me"
 set_var "$BACKEND_SERVICE" "GSTN_API_URL=https://sandbox.gstn.example"
 set_var "$BACKEND_SERVICE" "EWAY_BILL_API_URL=https://sandbox.ewaybill.example"
-set_var "$BACKEND_SERVICE" "EWAY_BILL_API_KEY=$EWAY_BILL_API_KEY_INPUT"
-set_var "$BACKEND_SERVICE" "INSURANCE_API_URL=$INSURANCE_API_URL_INPUT"
-set_var "$BACKEND_SERVICE" "INSURANCE_API_KEY=$INSURANCE_API_KEY_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "EWAY_BILL_API_KEY" "$EWAY_BILL_API_KEY_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "INSURANCE_API_URL" "$INSURANCE_API_URL_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "INSURANCE_API_KEY" "$INSURANCE_API_KEY_INPUT"
 
 if [[ "$SKIP_ADMIN" == "false" ]]; then
   echo "Setting admin variables on service: $ADMIN_SERVICE"

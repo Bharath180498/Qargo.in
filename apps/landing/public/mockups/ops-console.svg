@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="t d">
+  <title id="t">Ops console dummy screenshot</title>
+  <desc id="d">Placeholder dashboard for dispatch and analytics.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#edf3ff"/>
+      <stop offset="1" stop-color="#dfe8ff"/>
+    </linearGradient>
+    <linearGradient id="nav" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f3a7a"/>
+      <stop offset="1" stop-color="#172a5e"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="720" fill="url(#bg)"/>
+  <rect x="32" y="24" width="1136" height="672" rx="20" fill="#ffffff" stroke="#c2d2f2"/>
+
+  <rect x="32" y="24" width="250" height="672" rx="20" fill="url(#nav)"/>
+  <rect x="70" y="62" width="138" height="24" rx="8" fill="#dbe7ff" fill-opacity="0.34"/>
+  <rect x="70" y="118" width="170" height="44" rx="12" fill="#385ea9"/>
+  <rect x="70" y="178" width="170" height="44" rx="12" fill="#2b4e90"/>
+  <rect x="70" y="238" width="170" height="44" rx="12" fill="#2b4e90"/>
+  <rect x="70" y="298" width="170" height="44" rx="12" fill="#2b4e90"/>
+
+  <rect x="314" y="48" width="824" height="70" rx="16" fill="#f5f9ff" stroke="#d4e2f6"/>
+  <rect x="340" y="74" width="260" height="20" rx="10" fill="#1f3a7a" fill-opacity="0.16"/>
+  <rect x="930" y="66" width="190" height="34" rx="17" fill="#274b90"/>
+
+  <rect x="314" y="138" width="258" height="128" rx="16" fill="#f7fbff" stroke="#d4e2f6"/>
+  <rect x="596" y="138" width="258" height="128" rx="16" fill="#f7fbff" stroke="#d4e2f6"/>
+  <rect x="878" y="138" width="260" height="128" rx="16" fill="#f7fbff" stroke="#d4e2f6"/>
+
+  <rect x="342" y="168" width="82" height="14" rx="7" fill="#2f4f86" fill-opacity="0.24"/>
+  <rect x="624" y="168" width="82" height="14" rx="7" fill="#2f4f86" fill-opacity="0.24"/>
+  <rect x="906" y="168" width="82" height="14" rx="7" fill="#2f4f86" fill-opacity="0.24"/>
+  <rect x="342" y="194" width="160" height="40" rx="12" fill="#e8f1ff"/>
+  <rect x="624" y="194" width="160" height="40" rx="12" fill="#e8f1ff"/>
+  <rect x="906" y="194" width="160" height="40" rx="12" fill="#e8f1ff"/>
+
+  <rect x="314" y="288" width="548" height="378" rx="18" fill="#f7fbff" stroke="#d4e2f6"/>
+  <rect x="882" y="288" width="256" height="378" rx="18" fill="#f7fbff" stroke="#d4e2f6"/>
+
+  <rect x="342" y="320" width="120" height="16" rx="8" fill="#2f4f86" fill-opacity="0.24"/>
+  <rect x="342" y="352" width="492" height="284" rx="14" fill="#eaf3ff"/>
+
+  <rect x="910" y="320" width="160" height="16" rx="8" fill="#2f4f86" fill-opacity="0.24"/>
+  <rect x="910" y="352" width="200" height="70" rx="12" fill="#edf4ff"/>
+  <rect x="910" y="438" width="200" height="70" rx="12" fill="#edf4ff"/>
+  <rect x="910" y="524" width="200" height="70" rx="12" fill="#edf4ff"/>
+
+  <text x="52" y="688" fill="#1f3a7a" fill-opacity="0.6" font-family="Arial, sans-serif" font-size="22">Dummy preview: operations dashboard and dispatch console</text>
+</svg>

@@ -36,6 +36,7 @@
     },
     "extra": {
         "apiBaseUrl": "https://backend-production-0ee70.up.railway.app/api",
+        "supportPhone": "9844259899",
         "googleMapsApiKey": "AIzaSyBa4kGEsQMiWJrrpEi_4AyZq-qBFgdzfGQ"
     }
   }

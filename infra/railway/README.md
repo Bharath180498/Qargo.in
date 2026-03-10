@@ -36,6 +36,11 @@ This configures service references:
 - `REDIS_URL=${{Redis.REDIS_URL}}`
 - `NEXT_PUBLIC_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}/api`
 
+It also sets launch-critical vars including:
+
+- `ADMIN_PASSCODE`
+- `SUPPORT_PHONE`
+
 ## Deploy
 
 ```bash

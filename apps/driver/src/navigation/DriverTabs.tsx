@@ -6,6 +6,7 @@ import { HomeScreen } from '../screens/tabs/HomeScreen';
 import { EarningsScreen } from '../screens/tabs/EarningsScreen';
 import { HistoryScreen } from '../screens/tabs/HistoryScreen';
 import { ProfileScreen } from '../screens/tabs/ProfileScreen';
+import { SupportScreen } from '../screens/tabs/SupportScreen';
 import { colors, typography } from '../theme';
 import { useDriverAppStore } from '../store/useDriverAppStore';
 import { useDriverUxStore } from '../store/useDriverUxStore';
@@ -78,6 +79,7 @@ export function DriverTabs() {
         <Tab.Screen name="Home" component={HomeScreen} />
         <Tab.Screen name="Earnings" component={EarningsScreen} />
         {!simpleMode ? <Tab.Screen name="History" component={HistoryScreen} /> : null}
+        <Tab.Screen name="Support" component={SupportScreen} />
         <Tab.Screen name="Profile" component={ProfileScreen} />
       </Tab.Navigator>
       <SupportFab />

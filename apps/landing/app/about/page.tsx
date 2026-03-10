@@ -6,21 +6,17 @@ const LOGO_SRC = '/brand/qargo-logo.svg';
 const team = [
   {
     name: 'Bharath Raghunath',
+    initials: 'BR',
     role: 'Chief Vibe Coder • Techy Trailblazer',
     tagline: 'Builds the product rails, the dispatch brains, and the systems that make QARGO feel effortless.',
     accent: 'tech'
   },
   {
-    name: 'Mohan Kamaraji',
+    name: 'Mohan Kamaraju',
+    initials: 'MK',
     role: 'Chief Heisenberg of Ops • Doctor-Turned-Entrepreneur',
     tagline: 'Brings clinical precision to ground operations and turns real-world logistics chaos into repeatable playbooks.',
     accent: 'ops'
-  },
-  {
-    name: 'Chinmay Mohan',
-    role: 'Social Media Head • Chief Doom Scroller',
-    tagline: 'Owns QARGO’s voice online, shapes market buzz, and keeps the brand energy bold, current, and unforgettable.',
-    accent: 'brand'
   }
 ];
 
@@ -67,6 +63,10 @@ export default function AboutPage() {
         <div className="team-grid">
           {team.map((member, index) => (
             <article key={member.name} className={`team-card ${member.accent} fade-in-up delay-${index + 1}`}>
+              <div className="team-photo-slot" aria-label={`${member.name} photo placeholder`}>
+                <span>{member.initials}</span>
+                <small>Photo slot</small>
+              </div>
               <p className="team-role">{member.role}</p>
               <h3>{member.name}</h3>
               <p>{member.tagline}</p>

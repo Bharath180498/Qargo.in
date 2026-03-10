@@ -249,7 +249,8 @@ export class OrdersService {
                 user: true
               }
             },
-            rating: true
+            rating: true,
+            deliveryProof: true
           }
         },
         payment: true,

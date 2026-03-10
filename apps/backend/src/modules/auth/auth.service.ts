@@ -35,6 +35,10 @@ export class AuthService {
     return this.configService.get<string>('otp.fixedCode') ?? '123456';
   }
 
+  private get adminPasscode() {
+    return this.configService.get<string>('adminPasscode') ?? '';
+  }
+
   private async issueSession(user: { id: string; role: UserRole }) {
     const token = await this.jwtService.signAsync({
       userId: user.id,
@@ -170,6 +174,35 @@ export class AuthService {
       sessionId: session.sessionId,
       expiresAt: session.expiresAt,
       user
+    };
+  }
+
+  async adminPasscodeLogin(passcode: string) {
+    const configuredPasscode = this.adminPasscode.trim();
+    if (!configuredPasscode || passcode.trim() !== configuredPasscode) {
+      throw new UnauthorizedException('Invalid admin passcode');
+    }
+
+    let admin = await this.prisma.user.findFirst({
+      where: { role: UserRole.ADMIN },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    if (!admin) {
+      admin = await this.usersService.findOrCreateByPhone({
+        name: 'Ops Admin',
+        phone: '+919000000201',
+        role: UserRole.ADMIN
+      });
+    }
+
+    const session = await this.issueSession({ id: admin.id, role: admin.role });
+
+    return {
+      token: session.token,
+      sessionId: session.sessionId,
+      expiresAt: session.expiresAt,
+      user: admin
     };
   }
 

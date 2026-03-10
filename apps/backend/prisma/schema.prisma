@@ -155,6 +155,19 @@ enum DriverEnterpriseRequestStatus {
   REJECTED
 }
 
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_FOR_USER
+  RESOLVED
+}
+
+enum SupportMessageSenderType {
+  USER
+  ADMIN
+  SYSTEM
+}
+
 model User {
   id           String         @id @default(uuid())
   name         String
@@ -175,6 +188,8 @@ model User {
   kycVerifications KycVerification[]
   reviewedKycVerifications KycVerification[] @relation("KycReviewedByAdmin")
   driverPaymentMethods DriverPaymentMethod[]
+  supportTicketsRequested SupportTicket[] @relation("SupportTicketsRequested")
+  supportMessagesSent SupportTicketMessage[] @relation("SupportMessagesSent")
 }
 
 model DriverProfile {
@@ -206,6 +221,7 @@ model DriverProfile {
   tripOffers         TripOffer[]
   kycDocuments       KycDocument[]
   enterpriseRequests DriverEnterprisePlanRequest[]
+  deliveryProofs     TripDeliveryProof[]
 
   @@index([availabilityStatus, vehicleType, lastActiveAt])
 }
@@ -253,6 +269,7 @@ model Order {
   payment           Payment?
   tripOffers        TripOffer[]
   dispatchDecisions DispatchDecision[]
+  supportTickets    SupportTicket[]
 }
 
 model Trip {
@@ -277,6 +294,27 @@ model Trip {
   queuedDriver      DriverProfile? @relation("QueuedDriverTrips", fields: [queuedDriverId], references: [id])
   rating            Rating?
   offers            TripOffer[]
+  deliveryProof     TripDeliveryProof?
+  supportTickets    SupportTicket[]
+}
+
+model TripDeliveryProof {
+  id                  String        @id @default(uuid())
+  tripId               String       @unique
+  driverId             String
+  receiverName         String
+  receiverSignature    Json
+  signatureCapturedAt  DateTime?
+  photoFileKey         String
+  photoUrl             String
+  photoMimeType        String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  trip                 Trip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  driver               DriverProfile @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([driverId, createdAt])
 }
 
 model Rating {
@@ -310,6 +348,45 @@ model Payment {
   updatedAt          DateTime       @updatedAt
 
   order              Order          @relation(fields: [orderId], references: [id])
+}
+
+model SupportTicket {
+  id               String               @id @default(uuid())
+  requesterUserId  String
+  requesterRole    UserRole
+  orderId          String?
+  tripId           String?
+  subject          String
+  description      String
+  status           SupportTicketStatus  @default(OPEN)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  resolvedAt       DateTime?
+
+  requesterUser    User                 @relation("SupportTicketsRequested", fields: [requesterUserId], references: [id], onDelete: Cascade)
+  order            Order?               @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  trip             Trip?                @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  messages         SupportTicketMessage[]
+
+  @@index([requesterUserId, createdAt])
+  @@index([status, createdAt])
+  @@index([orderId])
+  @@index([tripId])
+}
+
+model SupportTicketMessage {
+  id               String                    @id @default(uuid())
+  ticketId         String
+  senderType       SupportMessageSenderType
+  senderUserId     String?
+  message          String
+  createdAt        DateTime                  @default(now())
+
+  ticket           SupportTicket             @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderUser       User?                     @relation("SupportMessagesSent", fields: [senderUserId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@index([senderUserId, createdAt])
 }
 
 model OtpSession {

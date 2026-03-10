@@ -16,6 +16,7 @@ export type DriverTabParamList = {
   Earnings: undefined;
   History: undefined;
   Profile: undefined;
+  Support: undefined;
 };
 
 export interface DriverSessionUser {

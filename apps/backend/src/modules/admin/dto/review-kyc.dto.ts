@@ -6,10 +6,4 @@ export class ReviewKycDto {
   @IsOptional()
   @IsString()
   reason?: string;
-
-  @ApiProperty({ required: false, example: 'admin-user-id' })
-  @IsOptional()
-  @IsString()
-  adminUserId?: string;
 }
-

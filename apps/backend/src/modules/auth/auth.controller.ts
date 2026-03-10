@@ -3,6 +3,7 @@ import { AuthService } from './auth.service';
 import { MockLoginDto } from './dto/mock-login.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { AdminPasscodeLoginDto } from './dto/admin-passcode-login.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -29,5 +30,10 @@ export class AuthController {
   @Post('mock-login')
   mockLogin(@Body() payload: MockLoginDto) {
     return this.authService.mockLogin(payload);
+  }
+
+  @Post('admin/passcode')
+  adminPasscodeLogin(@Body() payload: AdminPasscodeLoginDto) {
+    return this.authService.adminPasscodeLogin(payload.passcode);
   }
 }

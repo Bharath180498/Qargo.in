@@ -2,6 +2,7 @@
 
 ## Core Endpoints
 - `POST /api/auth/mock-login`
+- `POST /api/auth/admin/passcode`
 - `GET /api/health`
 - `POST /api/orders/estimate`
 - `POST /api/orders`
@@ -24,8 +25,20 @@
 - `GET /api/admin/overview`
 - `GET /api/admin/analytics/trips`
 - `GET /api/admin/analytics/heatmap`
+- `GET /api/admin/operations/summary`
+- `GET /api/admin/operations/bookings`
+- `GET /api/admin/operations/rides`
 - `GET /api/admin/fraud-alerts`
 - `GET /api/admin/compliance`
+- `GET /api/admin/support/tickets`
+- `GET /api/admin/support/tickets/:ticketId`
+- `POST /api/admin/support/tickets/:ticketId/reply`
+- `POST /api/admin/support/tickets/:ticketId/status`
+- `GET /api/support/contact`
+- `POST /api/support/tickets`
+- `GET /api/support/tickets?userId=`
+- `GET /api/support/tickets/:ticketId?userId=`
+- `POST /api/support/tickets/:ticketId/messages`
 - `POST /api/payments/create-intent`
 - `POST /api/insurance/quote`
 - `POST /api/ewaybill/generate`

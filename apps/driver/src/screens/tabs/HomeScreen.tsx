@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Linking,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -9,6 +10,8 @@ import {
   View
 } from 'react-native';
 import * as Location from 'expo-location';
+import { useNavigation } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { colors, radius, spacing, typography } from '../../theme';
 import { useDriverAppStore } from '../../store/useDriverAppStore';
 import { useDriverI18n } from '../../i18n/useDriverI18n';
@@ -16,6 +19,9 @@ import { useDriverUxStore } from '../../store/useDriverUxStore';
 import { LanguageSwitcher } from '../../components/LanguageSwitcher';
 import { openGoogleMapsNavigation } from '../../utils/mapsNavigation';
 import { speakDriverMessage } from '../../utils/voiceGuide';
+import { DeliveryProofModal, type DeliveryProofSubmission } from '../../components/DeliveryProofModal';
+import type { DriverTabParamList } from '../../types';
+import { SUPPORT_PHONE } from '../../services/api';
 
 const actionMap: Array<{ status: string; endpoint: string; label: string; payload?: Record<string, unknown> }> = [
   { status: 'ASSIGNED', endpoint: 'accept', label: 'Start Trip' },
@@ -39,6 +45,30 @@ const TRIP_STAGES: Array<{ key: string; label: string }> = [
   { key: 'COMPLETED', label: 'Delivered' }
 ];
 
+interface CompletionMetrics {
+  distanceKm?: number;
+  durationMinutes?: number;
+}
+
+function parseCompletionMetric(value: unknown) {
+  const candidate = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(candidate) || candidate < 0) {
+    return undefined;
+  }
+  return candidate;
+}
+
+function extractCompletionMetrics(payload?: Record<string, unknown>): CompletionMetrics {
+  if (!payload) {
+    return {};
+  }
+
+  return {
+    distanceKm: parseCompletionMetric(payload.distanceKm),
+    durationMinutes: parseCompletionMetric(payload.durationMinutes)
+  };
+}
+
 function getAvailabilityCopy(status?: 'ONLINE' | 'OFFLINE' | 'BUSY', t?: (key: any) => string) {
   if (!t) {
     return '';
@@ -55,6 +85,7 @@ function getAvailabilityCopy(status?: 'ONLINE' | 'OFFLINE' | 'BUSY', t?: (key: a
 
 export function HomeScreen() {
   const { t } = useDriverI18n();
+  const navigation = useNavigation<BottomTabNavigationProp<DriverTabParamList>>();
   const availabilityStatus = useDriverAppStore((state) => state.availabilityStatus);
   const setAvailability = useDriverAppStore((state) => state.setAvailability);
   const updateLocation = useDriverAppStore((state) => state.updateLocation);
@@ -65,12 +96,26 @@ export function HomeScreen() {
   const acceptOffer = useDriverAppStore((state) => state.acceptOffer);
   const rejectOffer = useDriverAppStore((state) => state.rejectOffer);
   const runTripAction = useDriverAppStore((state) => state.runTripAction);
+  const completeTripWithDeliveryProof = useDriverAppStore((state) => state.completeTripWithDeliveryProof);
 
   const voiceGuidanceEnabled = useDriverUxStore((state) => state.voiceGuidanceEnabled);
   const guidedHintsEnabled = useDriverUxStore((state) => state.guidedHintsEnabled);
 
   const [lastKnownLocation, setLastKnownLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [deliveryProofVisible, setDeliveryProofVisible] = useState(false);
+  const [deliveryProofSubmitting, setDeliveryProofSubmitting] = useState(false);
+  const [completionMetrics, setCompletionMetrics] = useState<CompletionMetrics>({});
+
+  const callSupport = async () => {
+    const url = `tel:${SUPPORT_PHONE}`;
+    const canOpen = await Linking.canOpenURL(url);
+    if (canOpen) {
+      await Linking.openURL(url);
+      return;
+    }
+    Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
+  };
 
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
   const previousOfferId = useRef<string | undefined>(undefined);
@@ -205,11 +250,39 @@ export function HomeScreen() {
       return;
     }
 
+    if (activeAction.endpoint === 'complete') {
+      setCompletionMetrics(extractCompletionMetrics(activeAction.payload));
+      setDeliveryProofVisible(true);
+      return;
+    }
+
     try {
       await runTripAction(currentJob.id, activeAction.endpoint, activeAction.payload);
       speakDriverMessage(activeAction.label, voiceGuidanceEnabled);
     } catch {
       Alert.alert('Action failed', 'Could not update trip state.');
+    }
+  };
+
+  const submitDeliveryProof = async (payload: DeliveryProofSubmission) => {
+    if (!currentJob) {
+      Alert.alert('No active trip', 'Trip is no longer active. Refresh jobs and try again.');
+      return;
+    }
+
+    setDeliveryProofSubmitting(true);
+    try {
+      await completeTripWithDeliveryProof(currentJob.id, {
+        ...payload,
+        ...completionMetrics
+      });
+      setDeliveryProofVisible(false);
+      setCompletionMetrics({});
+      speakDriverMessage('Delivery proof captured. Trip completed.', voiceGuidanceEnabled);
+    } catch {
+      Alert.alert('Completion failed', 'Could not upload delivery proof. Check network and retry.');
+    } finally {
+      setDeliveryProofSubmitting(false);
     }
   };
 
@@ -400,9 +473,26 @@ export function HomeScreen() {
         <View style={styles.supportCard}>
           <Text style={styles.supportTitle}>{t('home.support')}</Text>
           <Text style={styles.supportSub}>{t('home.supportSub')}</Text>
-          <Text style={styles.supportPhone}>9844259899</Text>
+          <Text style={styles.supportPhone}>{SUPPORT_PHONE}</Text>
+          <View style={styles.supportActionRow}>
+            <Pressable style={styles.supportActionPrimary} onPress={() => navigation.navigate('Support')}>
+              <Text style={styles.supportActionPrimaryText}>Open Support Center</Text>
+            </Pressable>
+            <Pressable style={styles.supportActionGhost} onPress={() => void callSupport()}>
+              <Text style={styles.supportActionGhostText}>Call</Text>
+            </Pressable>
+          </View>
         </View>
       </ScrollView>
+      <DeliveryProofModal
+        visible={deliveryProofVisible}
+        submitting={deliveryProofSubmitting}
+        onClose={() => {
+          setDeliveryProofVisible(false);
+          setCompletionMetrics({});
+        }}
+        onSubmit={submitDeliveryProof}
+      />
     </SafeAreaView>
   );
 }
@@ -619,5 +709,36 @@ const styles = StyleSheet.create({
   supportPhone: {
     fontFamily: typography.bodyBold,
     color: '#0F172A'
+  },
+  supportActionRow: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    gap: spacing.xs
+  },
+  supportActionPrimary: {
+    flex: 1,
+    borderRadius: 999,
+    backgroundColor: '#1D4ED8',
+    paddingVertical: 8,
+    alignItems: 'center'
+  },
+  supportActionPrimaryText: {
+    fontFamily: typography.bodyBold,
+    color: '#EFF6FF',
+    fontSize: 12
+  },
+  supportActionGhost: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+    backgroundColor: '#DBEAFE',
+    paddingHorizontal: spacing.sm,
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  supportActionGhostText: {
+    fontFamily: typography.bodyBold,
+    color: '#1E3A8A',
+    fontSize: 12
   }
 });

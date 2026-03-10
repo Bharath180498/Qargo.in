@@ -67,6 +67,11 @@ If your service names differ:
   --redis-service <redis-name>
 ```
 
+For launch access and support:
+
+- set `ADMIN_PASSCODE` to your secure dashboard passcode
+- set `SUPPORT_PHONE` to your active customer support number
+
 ## 6. Deploy
 
 ```bash

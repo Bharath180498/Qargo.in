@@ -3,11 +3,15 @@ import {
   AvailabilityStatus,
   InsurancePlan,
   OrderStatus,
+  Prisma,
+  SupportTicketStatus,
   TripStatus,
   VerificationStatus
 } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { KycService } from '../kyc/kyc.service';
+import { AdminOperationsBookingsQueryDto } from './dto/admin-operations-bookings-query.dto';
+import { AdminOperationsRidesQueryDto } from './dto/admin-operations-rides-query.dto';
 
 @Injectable()
 export class AdminService {
@@ -15,6 +19,23 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly kycService: KycService
   ) {}
+
+  private readonly activeOrderStatuses: OrderStatus[] = [
+    OrderStatus.CREATED,
+    OrderStatus.MATCHING,
+    OrderStatus.ASSIGNED,
+    OrderStatus.AT_PICKUP,
+    OrderStatus.LOADING,
+    OrderStatus.IN_TRANSIT
+  ];
+
+  private readonly activeRideStatuses: TripStatus[] = [
+    TripStatus.ASSIGNED,
+    TripStatus.DRIVER_EN_ROUTE,
+    TripStatus.ARRIVED_PICKUP,
+    TripStatus.LOADING,
+    TripStatus.IN_TRANSIT
+  ];
 
   async overview() {
     const [onlineDrivers, busyDrivers, pendingDrivers, tripsToday, activeOrders, completedOrders, revenue] =
@@ -315,6 +336,180 @@ export class AdminService {
       acceptanceRate,
       avgEtaMinutes
     };
+  }
+
+  async operationsSummary() {
+    const [activeBookings, activeRides, pendingSupport, onlineDrivers, busyDrivers] = await Promise.all([
+      this.prisma.order.count({
+        where: {
+          status: {
+            in: this.activeOrderStatuses
+          }
+        }
+      }),
+      this.prisma.trip.count({
+        where: {
+          status: {
+            in: this.activeRideStatuses
+          }
+        }
+      }),
+      this.prisma.supportTicket.count({
+        where: {
+          status: {
+            not: SupportTicketStatus.RESOLVED
+          }
+        }
+      }),
+      this.prisma.driverProfile.count({
+        where: { availabilityStatus: AvailabilityStatus.ONLINE }
+      }),
+      this.prisma.driverProfile.count({
+        where: { availabilityStatus: AvailabilityStatus.BUSY }
+      })
+    ]);
+
+    return {
+      activeBookings,
+      activeRides,
+      pendingSupport,
+      onlineDrivers,
+      busyDrivers
+    };
+  }
+
+  async operationsBookings(query: AdminOperationsBookingsQueryDto) {
+    const limit = query.limit ?? 60;
+    const scope = query.scope ?? 'active';
+
+    const where: Prisma.OrderWhereInput = {
+      ...(query.status
+        ? { status: query.status }
+        : scope === 'active'
+          ? {
+              status: {
+                in: this.activeOrderStatuses
+              }
+            }
+          : {})
+    };
+
+    if (scope === 'recent') {
+      where.createdAt = {
+        gte: new Date(Date.now() - 48 * 60 * 60 * 1000)
+      };
+    }
+
+    return this.prisma.order.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            phone: true
+          }
+        },
+        trip: {
+          include: {
+            driver: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    phone: true,
+                    rating: true
+                  }
+                }
+              }
+            },
+            deliveryProof: {
+              select: {
+                id: true,
+                receiverName: true,
+                photoUrl: true,
+                signatureCapturedAt: true
+              }
+            }
+          }
+        },
+        payment: {
+          select: {
+            id: true,
+            provider: true,
+            status: true,
+            amount: true,
+            updatedAt: true
+          }
+        }
+      }
+    });
+  }
+
+  async operationsRides(query: AdminOperationsRidesQueryDto) {
+    const limit = query.limit ?? 60;
+    const scope = query.scope ?? 'active';
+
+    const where: Prisma.TripWhereInput = {
+      ...(query.status
+        ? { status: query.status }
+        : scope === 'active'
+          ? {
+              status: {
+                in: this.activeRideStatuses
+              }
+            }
+          : {})
+    };
+
+    if (scope === 'recent') {
+      where.createdAt = {
+        gte: new Date(Date.now() - 48 * 60 * 60 * 1000)
+      };
+    }
+
+    return this.prisma.trip.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        order: {
+          include: {
+            customer: {
+              select: {
+                id: true,
+                name: true,
+                phone: true
+              }
+            }
+          }
+        },
+        driver: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                phone: true,
+                rating: true
+              }
+            }
+          }
+        },
+        deliveryProof: {
+          select: {
+            id: true,
+            receiverName: true,
+            photoUrl: true,
+            signatureCapturedAt: true
+          }
+        },
+        rating: true
+      }
+    });
   }
 
   pendingKycReview() {

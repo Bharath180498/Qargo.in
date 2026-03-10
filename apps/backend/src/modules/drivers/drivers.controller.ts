@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { DriversService } from './drivers.service';
 import { UpdateDriverLocationDto } from './dto/update-driver-location.dto';
 import { SetDriverAvailabilityDto } from './dto/set-driver-availability.dto';
 import { DriverEarningsQueryDto } from './dto/driver-earnings-query.dto';
 import { UpdateDriverSubscriptionDto } from './dto/update-driver-subscription.dto';
+import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
 
 @Controller('drivers')
 export class DriversController {
@@ -62,16 +63,19 @@ export class DriversController {
     return this.driversService.updateSubscriptionPlan(driverId, payload);
   }
 
+  @UseGuards(AdminAuthGuard)
   @Get('admin/pending-approvals')
   pendingApprovals() {
     return this.driversService.pendingApprovals();
   }
 
+  @UseGuards(AdminAuthGuard)
   @Post(':driverId/approve')
   approve(@Param('driverId') driverId: string) {
     return this.driversService.approve(driverId);
   }
 
+  @UseGuards(AdminAuthGuard)
   @Post(':driverId/reject')
   reject(@Param('driverId') driverId: string) {
     return this.driversService.reject(driverId);

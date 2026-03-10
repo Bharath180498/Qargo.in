@@ -17,6 +17,7 @@ import { CustomerTripSelectScreen } from './src/screens/customer/CustomerTripSel
 import { CustomerShipmentDetailsScreen } from './src/screens/customer/CustomerShipmentDetailsScreen';
 import { CustomerTrackingScreen } from './src/screens/customer/CustomerTrackingScreen';
 import { CustomerPaymentScreen } from './src/screens/customer/CustomerPaymentScreen';
+import { CustomerSupportScreen } from './src/screens/customer/CustomerSupportScreen';
 import { useSessionStore } from './src/store/useSessionStore';
 import { colors } from './src/theme';
 import type { RootStackParamList } from './src/types/navigation';
@@ -82,6 +83,11 @@ export default function App() {
         <Stack.Screen
           name="CustomerPayment"
           component={CustomerPaymentScreen}
+          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen
+          name="CustomerSupport"
+          component={CustomerSupportScreen}
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
         />
       </Stack.Navigator>

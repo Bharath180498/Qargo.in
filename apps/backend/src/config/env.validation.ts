@@ -97,6 +97,14 @@ class EnvSchema {
   OTP_FIXED_CODE?: string;
 
   @IsOptional()
+  @IsString()
+  ADMIN_PASSCODE?: string;
+
+  @IsOptional()
+  @IsString()
+  SUPPORT_PHONE?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(60)
   OTP_TTL_SECONDS?: number;

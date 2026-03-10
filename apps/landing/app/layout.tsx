@@ -1,5 +1,18 @@
 import type { Metadata } from 'next';
+import { Bricolage_Grotesque, DM_Sans } from 'next/font/google';
 import './globals.css';
+
+const bodyFont = DM_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '700'],
+  variable: '--font-body'
+});
+
+const displayFont = Bricolage_Grotesque({
+  subsets: ['latin'],
+  weight: ['500', '600', '700', '800'],
+  variable: '--font-display'
+});
 
 export const metadata: Metadata = {
   title: 'QARGO | Simply Deliver',
@@ -14,7 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="font-root">{children}</body>
+      <body className={`${bodyFont.variable} ${displayFont.variable}`}>{children}</body>
     </html>
   );
 }

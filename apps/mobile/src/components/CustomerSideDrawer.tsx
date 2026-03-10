@@ -1,8 +1,14 @@
 import { Alert, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { RootStackParamList } from '../types/navigation';
 import { useSessionStore } from '../store/useSessionStore';
+import { SUPPORT_PHONE } from '../services/api';
 
-type DrawerRoute = 'CustomerHome' | 'CustomerPayment' | 'CustomerRides' | 'CustomerProfile';
+type DrawerRoute =
+  | 'CustomerHome'
+  | 'CustomerPayment'
+  | 'CustomerRides'
+  | 'CustomerProfile'
+  | 'CustomerSupport';
 
 interface DrawerItem {
   key: DrawerRoute;
@@ -22,10 +28,9 @@ const DRAWER_ITEMS: DrawerItem[] = [
   { key: 'CustomerHome', label: 'Home' },
   { key: 'CustomerPayment', label: 'Payments' },
   { key: 'CustomerRides', label: 'Ride History' },
-  { key: 'CustomerProfile', label: 'Profile' }
+  { key: 'CustomerProfile', label: 'Profile' },
+  { key: 'CustomerSupport', label: 'Support Center' }
 ];
-
-const SUPPORT_NUMBER = '9844259899';
 
 export function CustomerSideDrawer({
   visible,
@@ -48,21 +53,17 @@ export function CustomerSideDrawer({
   };
 
   const callSupport = async () => {
-    const telUrl = `tel:${SUPPORT_NUMBER}`;
+    const telUrl = `tel:${SUPPORT_PHONE}`;
     try {
       const canOpen = await Linking.canOpenURL(telUrl);
       if (!canOpen) {
-        Alert.alert('Support', `Please call ${SUPPORT_NUMBER} for assistance.`);
+        Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
         return;
       }
       await Linking.openURL(telUrl);
     } catch {
-      Alert.alert('Support', `Please call ${SUPPORT_NUMBER} for assistance.`);
+      Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
     }
-  };
-
-  const onChatSoon = () => {
-    Alert.alert('Customer Care Chat', `Coming soon.\nFor now call ${SUPPORT_NUMBER} for assistance.`);
   };
 
   return (
@@ -96,11 +97,11 @@ export function CustomerSideDrawer({
             ) : null}
 
             <Pressable style={styles.itemButton} onPress={callSupport}>
-              <Text style={styles.itemText}>Call Support · {SUPPORT_NUMBER}</Text>
+              <Text style={styles.itemText}>Call Support · {SUPPORT_PHONE}</Text>
             </Pressable>
 
-            <Pressable style={[styles.itemButton, styles.itemButtonDisabled]} onPress={onChatSoon}>
-              <Text style={[styles.itemText, styles.itemTextDisabled]}>Customer Care Chat (Coming soon)</Text>
+            <Pressable style={[styles.itemButton, styles.itemButtonActive]} onPress={() => navigate('CustomerSupport')}>
+              <Text style={[styles.itemText, styles.itemTextActive]}>Open Support Center</Text>
             </Pressable>
           </View>
 

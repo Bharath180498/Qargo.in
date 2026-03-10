@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import { BrandHeader } from '../../components/BrandHeader';
+import { DeliveryProofModal, type DeliveryProofSubmission } from '../../components/DeliveryProofModal';
 import { useDriverStore } from '../../store/useDriverStore';
 import { colors, radius, spacing, typography } from '../../theme';
 import api from '../../services/api';
@@ -39,6 +40,8 @@ export function DriverDashboardScreen() {
   } = useDriverStore();
 
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
+  const [deliveryProofVisible, setDeliveryProofVisible] = useState(false);
+  const [deliveryProofSubmitting, setDeliveryProofSubmitting] = useState(false);
 
   useEffect(() => {
     void bootstrap();
@@ -111,22 +114,85 @@ export function DriverDashboardScreen() {
       return;
     }
 
+    if (activeAction.endpoint === 'complete') {
+      setDeliveryProofVisible(true);
+      return;
+    }
+
     try {
-      if (activeAction.endpoint === 'complete') {
-        await api.post(`/trips/${currentJob.id}/complete`, {
-          driverId: currentJob.driverId,
-          distanceKm: 18,
-          durationMinutes: 42
-        });
-      } else {
-        await api.post(`/trips/${currentJob.id}/${activeAction.endpoint}`, {
-          driverId: currentJob.driverId
-        });
-      }
+      await api.post(`/trips/${currentJob.id}/${activeAction.endpoint}`, {
+        driverId: currentJob.driverId
+      });
 
       await Promise.all([refreshJobs(), refreshEarnings()]);
     } catch {
       Alert.alert('Action failed', 'Unable to update trip state. Please retry.');
+    }
+  };
+
+  const submitDeliveryProof = async (payload: DeliveryProofSubmission) => {
+    if (!currentJob) {
+      Alert.alert('No active trip', 'Trip is no longer active. Refresh and try again.');
+      return;
+    }
+
+    setDeliveryProofSubmitting(true);
+    try {
+      const requestedContentType = payload.photoContentType.trim() || 'image/jpeg';
+      const requestedFileName = payload.photoFileName.trim() || 'delivery-proof.jpg';
+
+      const upload = await api.post(`/trips/${currentJob.id}/delivery-proof/upload-url`, {
+        driverId: currentJob.driverId,
+        fileName: requestedFileName,
+        contentType: requestedContentType
+      });
+
+      const uploadUrl = String(upload.data?.uploadUrl ?? '');
+      const fileUrl = String(upload.data?.fileUrl ?? '');
+      const fileKey = String(upload.data?.fileKey ?? '');
+      const resolvedContentType = String(upload.data?.contentType ?? requestedContentType);
+
+      if (!fileUrl || !fileKey) {
+        throw new Error('Delivery proof upload metadata missing');
+      }
+
+      if (uploadUrl && !uploadUrl.startsWith('mock://')) {
+        const fileResponse = await fetch(payload.photoUri);
+        if (!fileResponse.ok) {
+          throw new Error('Could not read delivery photo from device');
+        }
+
+        const blob = await fileResponse.blob();
+        const putResponse = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': resolvedContentType
+          },
+          body: blob
+        });
+
+        if (!putResponse.ok) {
+          throw new Error('Could not upload delivery proof photo');
+        }
+      }
+
+      await api.post(`/trips/${currentJob.id}/complete`, {
+        driverId: currentJob.driverId,
+        distanceKm: 18,
+        durationMinutes: 42,
+        receiverName: payload.receiverName,
+        receiverSignature: payload.receiverSignature,
+        deliveryPhotoFileKey: fileKey,
+        deliveryPhotoUrl: fileUrl,
+        deliveryPhotoMimeType: resolvedContentType
+      });
+
+      setDeliveryProofVisible(false);
+      await Promise.all([refreshJobs(), refreshEarnings()]);
+    } catch {
+      Alert.alert('Completion failed', 'Could not upload delivery proof. Please retry.');
+    } finally {
+      setDeliveryProofSubmitting(false);
     }
   };
 
@@ -228,6 +294,12 @@ export function DriverDashboardScreen() {
           )}
         </View>
       </ScrollView>
+      <DeliveryProofModal
+        visible={deliveryProofVisible}
+        submitting={deliveryProofSubmitting}
+        onClose={() => setDeliveryProofVisible(false)}
+        onSubmit={submitDeliveryProof}
+      />
     </SafeAreaView>
   );
 }

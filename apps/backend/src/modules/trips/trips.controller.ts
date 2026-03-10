@@ -3,6 +3,7 @@ import { TripsService } from './trips.service';
 import { TripDriverActionDto } from './dto/trip-driver-action.dto';
 import { CompleteTripDto } from './dto/complete-trip.dto';
 import { RateTripDto } from './dto/rate-trip.dto';
+import { GenerateDeliveryProofUploadUrlDto } from './dto/generate-delivery-proof-upload-url.dto';
 
 @Controller('trips')
 export class TripsController {
@@ -31,6 +32,14 @@ export class TripsController {
   @Post(':tripId/start-transit')
   startTransit(@Param('tripId') tripId: string, @Body() payload: TripDriverActionDto) {
     return this.tripsService.startTransit(tripId, payload.driverId);
+  }
+
+  @Post(':tripId/delivery-proof/upload-url')
+  deliveryProofUploadUrl(
+    @Param('tripId') tripId: string,
+    @Body() payload: GenerateDeliveryProofUploadUrlDto
+  ) {
+    return this.tripsService.generateDeliveryProofUploadUrl(tripId, payload);
   }
 
   @Post(':tripId/complete')

@@ -14,6 +14,7 @@ export default () => ({
     ttlSeconds: Number(process.env.OTP_TTL_SECONDS ?? 300),
     fixedCode: process.env.OTP_FIXED_CODE ?? '123456'
   },
+  adminPasscode: process.env.ADMIN_PASSCODE ?? '',
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
     authToken: process.env.TWILIO_AUTH_TOKEN ?? '',
@@ -24,6 +25,8 @@ export default () => ({
   dispatchRadiusKm: Number(process.env.DISPATCH_RADIUS_KM ?? 8),
   waitingRatePerMinute: Number(process.env.WAITING_RATE_PER_MINUTE ?? 3),
   baseFarePerKm: Number(process.env.BASE_FARE_PER_KM ?? 14),
+  alwaysOnDiscountPercent: Number(process.env.ALWAYS_ON_DISCOUNT_PERCENT ?? 8),
+  supportPhone: process.env.SUPPORT_PHONE ?? '9844259899',
   googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY ?? '',
   idfyApiKey: process.env.IDFY_API_KEY ?? '',
   idfyApiUrl: process.env.IDFY_API_URL ?? '',

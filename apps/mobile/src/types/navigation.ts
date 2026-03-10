@@ -8,4 +8,5 @@ export type RootStackParamList = {
   CustomerShipmentDetails: undefined;
   CustomerTracking: undefined;
   CustomerPayment: undefined;
+  CustomerSupport: undefined;
 };

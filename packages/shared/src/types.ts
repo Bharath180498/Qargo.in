@@ -40,6 +40,9 @@ export interface PriceBreakdown {
   waitingCharge: number;
   insuranceCharge: number;
   discount: number;
+  compareAtTotal?: number;
+  offerDiscountAmount?: number;
+  offerDiscountPercent?: number;
   total: number;
 }
 

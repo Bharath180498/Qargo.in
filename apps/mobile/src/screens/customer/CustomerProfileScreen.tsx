@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Linking, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Linking,
+  Pressable,
+  RefreshControl,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import api from '../../services/api';
+import api, { SUPPORT_PHONE } from '../../services/api';
 import { isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
 import { useSessionStore } from '../../store/useSessionStore';
 import type { RootStackParamList } from '../../types/navigation';
@@ -10,31 +22,112 @@ import { CustomerSideDrawer, type DrawerRoute } from '../../components/CustomerS
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerProfile'>;
 
 interface OrderSummaryRow {
+  id: string;
   status: string;
-  finalPrice?: number;
-  estimatedPrice?: number;
+  finalPrice?: number | string | null;
+  estimatedPrice?: number | string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  vehicleType?: string;
+}
+
+const PAYMENT_LABELS = {
+  VISA_5496: 'Visa ...5496',
+  MASTERCARD_6802: 'Mastercard ...6802',
+  UPI_SCAN_PAY: 'UPI Scan & Pay',
+  DRIVER_UPI_DIRECT: 'Driver UPI',
+  CASH: 'Cash on delivery'
+} as const;
+
+function formatInr(amount: number) {
+  return `INR ${amount.toFixed(0)}`;
+}
+
+function asAmount(value: number | string | null | undefined) {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) {
+    return 0;
+  }
+  return amount;
+}
+
+function formatDateLabel(date?: Date) {
+  if (!date || Number.isNaN(date.getTime())) {
+    return 'N/A';
+  }
+
+  return date.toLocaleDateString(undefined, {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
+}
+
+function formatMonthYear(date?: Date) {
+  if (!date || Number.isNaN(date.getTime())) {
+    return 'N/A';
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    year: 'numeric'
+  });
 }
 
 export function CustomerProfileScreen({ navigation }: Props) {
   const user = useSessionStore((state) => state.user);
   const activeOrderId = useCustomerStore((state) => state.activeOrderId);
+  const activeOrderStatus = useCustomerStore((state) => state.activeOrderStatus);
+  const paymentMethod = useCustomerStore((state) => state.paymentMethod);
+  const insuranceSelected = useCustomerStore((state) => state.insuranceSelected);
+  const minDriverRating = useCustomerStore((state) => state.minDriverRating);
+  const goodsValue = useCustomerStore((state) => state.goodsValue);
+  const autoGenerateEwayBill = useCustomerStore((state) => state.autoGenerateEwayBill);
+
   const [orders, setOrders] = useState<OrderSummaryRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | undefined>();
   const [drawerVisible, setDrawerVisible] = useState(false);
-  const supportNumber = '9844259899';
 
-  const loadStats = useCallback(async () => {
-    if (!user?.id) {
-      return;
-    }
-
-    const response = await api.get('/orders', {
-      params: {
-        customerId: user.id
+  const loadStats = useCallback(
+    async (isRefresh = false) => {
+      if (!user?.id) {
+        return;
       }
-    });
 
-    setOrders(Array.isArray(response.data) ? (response.data as OrderSummaryRow[]) : []);
-  }, [user?.id]);
+      if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setError(undefined);
+
+      try {
+        const response = await api.get('/orders', {
+          params: {
+            customerId: user.id
+          }
+        });
+
+        setOrders(Array.isArray(response.data) ? (response.data as OrderSummaryRow[]) : []);
+      } catch (nextError: unknown) {
+        const message =
+          typeof nextError === 'object' &&
+          nextError !== null &&
+          'message' in nextError &&
+          typeof (nextError as { message?: unknown }).message === 'string'
+            ? (nextError as { message: string }).message
+            : 'Unable to load profile insights.';
+
+        setError(message);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [user?.id]
+  );
 
   useEffect(() => {
     void loadStats();
@@ -42,40 +135,87 @@ export function CustomerProfileScreen({ navigation }: Props) {
 
   const stats = useMemo(() => {
     const total = orders.length;
-    const completed = orders.filter((item) => item.status === 'DELIVERED').length;
+    const deliveredOrders = orders.filter((item) => item.status === 'DELIVERED');
+    const completed = deliveredOrders.length;
+    const cancelled = orders.filter((item) => item.status === 'CANCELLED').length;
     const ongoing = orders.filter((item) => isOngoingOrderStatus(item.status)).length;
-    const spend = orders
-      .filter((item) => item.status === 'DELIVERED')
-      .reduce((sum, item) => sum + Number(item.finalPrice ?? item.estimatedPrice ?? 0), 0);
+    const spend = deliveredOrders.reduce(
+      (sum, item) => sum + asAmount(item.finalPrice ?? item.estimatedPrice),
+      0
+    );
+    const avgTicket = completed > 0 ? spend / completed : 0;
+    const reliabilityScore = total > 0 ? Math.round((completed / total) * 100) : 100;
+
+    const firstOrderDate = orders.reduce<Date | undefined>((earliest, item) => {
+      const candidate = new Date(item.createdAt ?? item.updatedAt ?? '');
+      if (Number.isNaN(candidate.getTime())) {
+        return earliest;
+      }
+      if (!earliest || candidate < earliest) {
+        return candidate;
+      }
+      return earliest;
+    }, undefined);
+
+    const lastDeliveredDate = deliveredOrders.reduce<Date | undefined>((latest, item) => {
+      const candidate = new Date(item.updatedAt ?? item.createdAt ?? '');
+      if (Number.isNaN(candidate.getTime())) {
+        return latest;
+      }
+      if (!latest || candidate > latest) {
+        return candidate;
+      }
+      return latest;
+    }, undefined);
+
+    const vehicleCounts = deliveredOrders.reduce<Record<string, number>>((acc, item) => {
+      const key = item.vehicleType?.trim() || 'MIXED';
+      acc[key] = (acc[key] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const favoriteVehicle =
+      Object.entries(vehicleCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'MIXED';
 
     return {
       total,
       completed,
+      cancelled,
       ongoing,
-      spend
+      spend,
+      avgTicket,
+      reliabilityScore,
+      firstOrderDate,
+      lastDeliveredDate,
+      favoriteVehicle
     };
   }, [orders]);
+
+  const firstName = useMemo(() => {
+    const value = user?.name?.trim();
+    if (!value) {
+      return 'Customer';
+    }
+
+    return value.split(/\s+/)[0] ?? value;
+  }, [user?.name]);
 
   const navigateFromDrawer = (route: DrawerRoute) => {
     navigation.navigate(route);
   };
 
   const callSupport = async () => {
-    const telUrl = `tel:${supportNumber}`;
+    const telUrl = `tel:${SUPPORT_PHONE}`;
     try {
       const canOpen = await Linking.canOpenURL(telUrl);
       if (!canOpen) {
-        Alert.alert('Support', `Please call ${supportNumber} for assistance.`);
+        Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
         return;
       }
       await Linking.openURL(telUrl);
     } catch {
-      Alert.alert('Support', `Please call ${supportNumber} for assistance.`);
+      Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
     }
-  };
-
-  const showChatSoon = () => {
-    Alert.alert('Customer Care Chat', `Coming soon.\nFor now call ${supportNumber} for assistance.`);
   };
 
   return (
@@ -85,84 +225,183 @@ export function CustomerProfileScreen({ navigation }: Props) {
           <Pressable style={styles.backButton} onPress={() => setDrawerVisible(true)}>
             <Text style={styles.backText}>≡</Text>
           </Pressable>
-          <Text style={styles.title}>Profile</Text>
+          <Text style={styles.title}>My Account</Text>
           <View style={styles.headerSpacer} />
         </View>
 
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.scroll}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => {
+                void loadStats(true);
+              }}
+              tintColor="#0F766E"
+            />
+          }
           showsVerticalScrollIndicator={false}
           showsHorizontalScrollIndicator={false}
           alwaysBounceHorizontal={false}
           bounces={false}
           directionalLockEnabled
         >
-          <View style={styles.profileCard}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{user?.name?.slice(0, 1)?.toUpperCase() ?? 'Q'}</Text>
+          <LinearGradient
+            colors={['#0F172A', '#0F766E', '#0EA5A4']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.heroCard}
+          >
+            <View style={styles.heroTopRow}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{user?.name?.slice(0, 1)?.toUpperCase() ?? 'Q'}</Text>
+              </View>
+              <View style={styles.heroBadges}>
+                <Text style={styles.heroBadge}>{stats.reliabilityScore}% reliability</Text>
+                <Text style={styles.heroBadge}>Member since {formatMonthYear(stats.firstOrderDate)}</Text>
+              </View>
             </View>
+
             <View style={styles.profileCopy}>
-              <Text style={styles.name}>{user?.name ?? 'Qargo Customer'}</Text>
+              <Text style={styles.heroEyebrow}>QARGO PROFILE</Text>
+              <Text style={styles.name}>Hi {firstName}, great to see you.</Text>
               <Text style={styles.meta}>{user?.phone ?? '+91 90000 00001'}</Text>
-              <Text style={styles.meta}>Role: {user?.role ?? 'CUSTOMER'}</Text>
+              <Text style={styles.meta}>Verified account · Priority support enabled</Text>
+            </View>
+
+            {activeOrderId ? (
+              <View style={styles.activeTripPill}>
+                <Text style={styles.activeTripLabel}>Active Trip</Text>
+                <Text style={styles.activeTripValue}>{activeOrderStatus ?? 'IN_TRANSIT'}</Text>
+              </View>
+            ) : null}
+          </LinearGradient>
+
+          {loading ? (
+            <View style={styles.loadingCard}>
+              <ActivityIndicator color="#0F766E" />
+              <Text style={styles.loadingText}>Loading profile insights...</Text>
+            </View>
+          ) : null}
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+          <View style={styles.metricsGrid}>
+            <View style={[styles.metricCard, styles.metricSpend]}>
+              <Text style={styles.metricValueDark}>{formatInr(stats.spend)}</Text>
+              <Text style={styles.metricLabelDark}>Lifetime spend</Text>
+            </View>
+            <View style={[styles.metricCard, styles.metricOrders]}>
+              <Text style={styles.metricValueBlue}>{stats.total}</Text>
+              <Text style={styles.metricLabelBlue}>Total orders</Text>
+            </View>
+            <View style={[styles.metricCard, styles.metricTrust]}>
+              <Text style={styles.metricValueTeal}>{stats.completed}</Text>
+              <Text style={styles.metricLabelTeal}>Delivered</Text>
+            </View>
+            <View style={[styles.metricCard, styles.metricRisk]}>
+              <Text style={styles.metricValueOrange}>{stats.cancelled}</Text>
+              <Text style={styles.metricLabelOrange}>Cancelled</Text>
             </View>
           </View>
 
-          <View style={styles.metricsGrid}>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricValue}>{stats.total}</Text>
-              <Text style={styles.metricLabel}>Total rides</Text>
-            </View>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricValue}>{stats.completed}</Text>
-              <Text style={styles.metricLabel}>Delivered</Text>
-            </View>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricValue}>{stats.ongoing}</Text>
-              <Text style={styles.metricLabel}>Ongoing</Text>
-            </View>
-            <View style={styles.metricCard}>
-              <Text style={styles.metricValue}>INR {stats.spend.toFixed(0)}</Text>
-              <Text style={styles.metricLabel}>Total spend</Text>
+          <View style={styles.storyCard}>
+            <Text style={styles.storyTitle}>Delivery Story</Text>
+            <View style={styles.storyGrid}>
+              <View style={styles.storyItem}>
+                <Text style={styles.storyValue}>{formatInr(stats.avgTicket)}</Text>
+                <Text style={styles.storyLabel}>Avg order value</Text>
+              </View>
+              <View style={styles.storyItem}>
+                <Text style={styles.storyValue}>{stats.favoriteVehicle.replace(/_/g, ' ')}</Text>
+                <Text style={styles.storyLabel}>Most used vehicle</Text>
+              </View>
+              <View style={styles.storyItem}>
+                <Text style={styles.storyValue}>{formatDateLabel(stats.lastDeliveredDate)}</Text>
+                <Text style={styles.storyLabel}>Last delivery</Text>
+              </View>
+              <View style={styles.storyItem}>
+                <Text style={styles.storyValue}>{stats.ongoing}</Text>
+                <Text style={styles.storyLabel}>Ongoing now</Text>
+              </View>
             </View>
           </View>
 
           <View style={styles.actionsCard}>
-            <Text style={styles.actionsTitle}>Quick actions</Text>
+            <Text style={styles.actionsTitle}>Quick Access</Text>
+            <View style={styles.quickGrid}>
+              <Pressable style={styles.quickCard} onPress={() => navigation.navigate('CustomerPayment')}>
+                <Text style={styles.quickCardEyebrow}>PAYMENTS</Text>
+                <Text style={styles.quickCardTitle}>Manage payment methods</Text>
+                <Text style={styles.quickCardMeta}>{PAYMENT_LABELS[paymentMethod]}</Text>
+              </Pressable>
 
-            <Pressable style={styles.actionButton} onPress={() => navigation.navigate('CustomerRides')}>
-              <Text style={styles.actionText}>View ride history</Text>
-              <Text style={styles.actionArrow}>{'>'}</Text>
+              <Pressable style={styles.quickCard} onPress={() => navigation.navigate('CustomerRides')}>
+                <Text style={styles.quickCardEyebrow}>HISTORY</Text>
+                <Text style={styles.quickCardTitle}>Review previous trips</Text>
+                <Text style={styles.quickCardMeta}>Invoices, proofs, and timeline</Text>
+              </Pressable>
+
+              <Pressable
+                style={[styles.quickCard, !activeOrderId && styles.quickCardDisabled]}
+                onPress={() => activeOrderId && navigation.navigate('CustomerTracking')}
+              >
+                <Text style={styles.quickCardEyebrow}>TRACKING</Text>
+                <Text style={styles.quickCardTitle}>
+                  {activeOrderId ? 'Resume live tracking' : 'No active trip'}
+                </Text>
+                <Text style={styles.quickCardMeta}>
+                  {activeOrderId ? 'Driver location and trip updates' : 'Book a new ride from Home'}
+                </Text>
+              </Pressable>
+
+              <Pressable style={styles.quickCard} onPress={() => navigation.navigate('CustomerShipmentDetails')}>
+                <Text style={styles.quickCardEyebrow}>SHIPMENT</Text>
+                <Text style={styles.quickCardTitle}>Set shipment defaults</Text>
+                <Text style={styles.quickCardMeta}>Insurance, GST, and goods value</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.actionsCard}>
+            <Text style={styles.actionsTitle}>Preferences Snapshot</Text>
+            <View style={styles.preferenceRow}>
+              <Text style={styles.preferenceLabel}>Preferred payment</Text>
+              <Text style={styles.preferenceValue}>{PAYMENT_LABELS[paymentMethod]}</Text>
+            </View>
+            <View style={styles.preferenceRow}>
+              <Text style={styles.preferenceLabel}>Insurance plan</Text>
+              <Text style={styles.preferenceValue}>{insuranceSelected}</Text>
+            </View>
+            <View style={styles.preferenceRow}>
+              <Text style={styles.preferenceLabel}>Minimum driver rating</Text>
+              <Text style={styles.preferenceValue}>{minDriverRating.toFixed(1)}+</Text>
+            </View>
+            <View style={styles.preferenceRow}>
+              <Text style={styles.preferenceLabel}>Typical goods value</Text>
+              <Text style={styles.preferenceValue}>{formatInr(goodsValue)}</Text>
+            </View>
+            <View style={styles.preferenceRow}>
+              <Text style={styles.preferenceLabel}>Auto eWay bill</Text>
+              <Text style={styles.preferenceValue}>{autoGenerateEwayBill ? 'Enabled' : 'Disabled'}</Text>
+            </View>
+          </View>
+
+          <View style={styles.supportCard}>
+            <Text style={styles.actionsTitle}>Need Help?</Text>
+            <Text style={styles.supportSubtitle}>
+              Priority customer care is available for urgent shipment issues.
+            </Text>
+
+            <Pressable style={styles.supportButton} onPress={() => void callSupport()}>
+              <Text style={styles.supportButtonText}>Call {SUPPORT_PHONE}</Text>
             </Pressable>
 
             <Pressable
-              style={[styles.actionButton, activeOrderId ? undefined : styles.actionButtonDisabled]}
-              onPress={() => activeOrderId && navigation.navigate('CustomerTracking')}
+              style={[styles.supportButton, styles.supportButtonGhost]}
+              onPress={() => navigation.navigate('CustomerSupport')}
             >
-              <Text style={[styles.actionText, !activeOrderId ? styles.actionTextDisabled : undefined]}>
-                {activeOrderId ? 'Resume active trip' : 'No active trip to resume'}
-              </Text>
-              <Text style={[styles.actionArrow, !activeOrderId ? styles.actionTextDisabled : undefined]}>{'>'}</Text>
-            </Pressable>
-
-            <Pressable style={styles.actionButton} onPress={() => navigation.navigate('CustomerHome')}>
-              <Text style={styles.actionText}>Back to booking home</Text>
-              <Text style={styles.actionArrow}>{'>'}</Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.actionsCard}>
-            <Text style={styles.actionsTitle}>Support</Text>
-
-            <Pressable style={styles.actionButton} onPress={() => void callSupport()}>
-              <Text style={styles.actionText}>Call {supportNumber}</Text>
-              <Text style={styles.actionArrow}>{'>'}</Text>
-            </Pressable>
-
-            <Pressable style={[styles.actionButton, styles.actionButtonDisabled]} onPress={showChatSoon}>
-              <Text style={[styles.actionText, styles.actionTextDisabled]}>Customer Care Chat (Coming soon)</Text>
-              <Text style={[styles.actionArrow, styles.actionTextDisabled]}>{'>'}</Text>
+              <Text style={styles.supportButtonGhostText}>Open support center</Text>
             </Pressable>
           </View>
         </ScrollView>
@@ -229,21 +468,24 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
     gap: 14
   },
-  profileCard: {
+  heroCard: {
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
     padding: 14,
+    gap: 10
+  },
+  heroTopRow: {
     flexDirection: 'row',
-    gap: 12,
-    alignItems: 'center'
+    justifyContent: 'space-between',
+    gap: 10
   },
   avatar: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     backgroundColor: '#F97316',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -252,18 +494,82 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 22
   },
+  heroBadges: {
+    flex: 1,
+    alignItems: 'flex-end',
+    gap: 6
+  },
+  heroBadge: {
+    color: '#ECFEFF',
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
+    borderWidth: 1,
+    borderColor: 'rgba(236, 254, 255, 0.35)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 11
+  },
   profileCopy: {
     gap: 2
   },
+  heroEyebrow: {
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 11,
+    color: '#CCFBF1',
+    letterSpacing: 0.9
+  },
   name: {
     fontFamily: 'Sora_700Bold',
-    fontSize: 18,
-    color: '#0F172A'
+    fontSize: 20,
+    color: '#FFFFFF'
   },
   meta: {
     fontFamily: 'Manrope_500Medium',
-    color: '#475569',
+    color: '#E2E8F0',
     fontSize: 13
+  },
+  activeTripPill: {
+    marginTop: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.28)',
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between'
+  },
+  activeTripLabel: {
+    color: '#CCFBF1',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  activeTripValue: {
+    color: '#FFFFFF',
+    fontFamily: 'Sora_700Bold',
+    fontSize: 12
+  },
+  loadingCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    backgroundColor: '#ECFDF5',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  loadingText: {
+    color: '#0F766E',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  errorText: {
+    color: '#B91C1C',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
   },
   metricsGrid: {
     flexDirection: 'row',
@@ -275,21 +581,104 @@ const styles = StyleSheet.create({
     width: '49%',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#DBEAFE',
-    backgroundColor: '#EFF6FF',
     paddingVertical: 12,
     paddingHorizontal: 10,
     gap: 2
   },
-  metricValue: {
+  metricSpend: {
+    borderColor: '#C7D2FE',
+    backgroundColor: '#EEF2FF'
+  },
+  metricOrders: {
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF'
+  },
+  metricTrust: {
+    borderColor: '#A7F3D0',
+    backgroundColor: '#ECFDF5'
+  },
+  metricRisk: {
+    borderColor: '#FED7AA',
+    backgroundColor: '#FFF7ED'
+  },
+  metricValueDark: {
+    fontFamily: 'Sora_700Bold',
+    color: '#312E81',
+    fontSize: 16
+  },
+  metricLabelDark: {
+    fontFamily: 'Manrope_700Bold',
+    color: '#4338CA',
+    fontSize: 12
+  },
+  metricValueBlue: {
     fontFamily: 'Sora_700Bold',
     color: '#1E3A8A',
     fontSize: 16
   },
-  metricLabel: {
-    fontFamily: 'Manrope_500Medium',
+  metricLabelBlue: {
+    fontFamily: 'Manrope_700Bold',
     color: '#1D4ED8',
     fontSize: 12
+  },
+  metricValueTeal: {
+    fontFamily: 'Sora_700Bold',
+    color: '#065F46',
+    fontSize: 16
+  },
+  metricLabelTeal: {
+    fontFamily: 'Manrope_700Bold',
+    color: '#047857',
+    fontSize: 12
+  },
+  metricValueOrange: {
+    fontFamily: 'Sora_700Bold',
+    color: '#9A3412',
+    fontSize: 16
+  },
+  metricLabelOrange: {
+    fontFamily: 'Manrope_700Bold',
+    color: '#C2410C',
+    fontSize: 12
+  },
+  storyCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    gap: 10
+  },
+  storyTitle: {
+    fontFamily: 'Sora_700Bold',
+    color: '#334155',
+    fontSize: 16
+  },
+  storyGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 8,
+    justifyContent: 'space-between'
+  },
+  storyItem: {
+    width: '49%',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    gap: 2
+  },
+  storyValue: {
+    fontFamily: 'Sora_700Bold',
+    color: '#0F172A',
+    fontSize: 13
+  },
+  storyLabel: {
+    fontFamily: 'Manrope_700Bold',
+    color: '#64748B',
+    fontSize: 11
   },
   actionsCard: {
     borderRadius: 16,
@@ -304,31 +693,94 @@ const styles = StyleSheet.create({
     color: '#334155',
     fontSize: 16
   },
-  actionButton: {
+  quickGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 10
+  },
+  quickCard: {
+    width: '49%',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#D1D5DB',
     backgroundColor: '#F8FAFC',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 11,
+    gap: 4
+  },
+  quickCardDisabled: {
+    opacity: 0.55
+  },
+  quickCardEyebrow: {
+    color: '#0F766E',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 10,
+    letterSpacing: 0.7
+  },
+  quickCardTitle: {
+    color: '#0F172A',
+    fontFamily: 'Sora_700Bold',
+    fontSize: 12
+  },
+  quickCardMeta: {
+    color: '#64748B',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 11
+  },
+  preferenceRow: {
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center'
   },
-  actionButtonDisabled: {
-    opacity: 0.6
+  preferenceLabel: {
+    color: '#475569',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
   },
-  actionText: {
+  preferenceValue: {
     fontFamily: 'Manrope_700Bold',
     color: '#0F172A',
+    fontSize: 12
+  },
+  supportCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    padding: 12,
+    gap: 10
+  },
+  supportSubtitle: {
+    color: '#475569',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12
+  },
+  supportButton: {
+    borderRadius: 10,
+    backgroundColor: '#0F172A',
+    paddingVertical: 11,
+    alignItems: 'center'
+  },
+  supportButtonText: {
+    color: '#FFFFFF',
+    fontFamily: 'Manrope_700Bold',
     fontSize: 13
   },
-  actionTextDisabled: {
-    color: '#64748B'
+  supportButtonGhost: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE'
   },
-  actionArrow: {
+  supportButtonGhostText: {
+    color: '#1D4ED8',
     fontFamily: 'Manrope_700Bold',
-    color: '#334155',
-    fontSize: 16
+    fontSize: 13
   }
 });

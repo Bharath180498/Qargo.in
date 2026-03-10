@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -11,6 +11,7 @@ import {
 import { colors, radius, spacing, typography } from '../../theme';
 import { useDriverAppStore } from '../../store/useDriverAppStore';
 import { openGoogleMapsNavigation } from '../../utils/mapsNavigation';
+import { DeliveryProofModal, type DeliveryProofSubmission } from '../../components/DeliveryProofModal';
 
 const actionMap: Array<{ status: string; endpoint: string; label: string; payload?: Record<string, unknown> }> = [
   { status: 'ASSIGNED', endpoint: 'accept', label: 'Accept Job' },
@@ -25,6 +26,30 @@ const actionMap: Array<{ status: string; endpoint: string; label: string; payloa
   }
 ];
 
+interface CompletionMetrics {
+  distanceKm?: number;
+  durationMinutes?: number;
+}
+
+function parseCompletionMetric(value: unknown) {
+  const candidate = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(candidate) || candidate < 0) {
+    return undefined;
+  }
+  return candidate;
+}
+
+function extractCompletionMetrics(payload?: Record<string, unknown>): CompletionMetrics {
+  if (!payload) {
+    return {};
+  }
+
+  return {
+    distanceKm: parseCompletionMetric(payload.distanceKm),
+    durationMinutes: parseCompletionMetric(payload.durationMinutes)
+  };
+}
+
 export function JobsScreen() {
   const currentJob = useDriverAppStore((state) => state.currentJob);
   const nextJob = useDriverAppStore((state) => state.nextJob);
@@ -33,6 +58,10 @@ export function JobsScreen() {
   const acceptOffer = useDriverAppStore((state) => state.acceptOffer);
   const rejectOffer = useDriverAppStore((state) => state.rejectOffer);
   const runTripAction = useDriverAppStore((state) => state.runTripAction);
+  const completeTripWithDeliveryProof = useDriverAppStore((state) => state.completeTripWithDeliveryProof);
+  const [deliveryProofVisible, setDeliveryProofVisible] = useState(false);
+  const [deliveryProofSubmitting, setDeliveryProofSubmitting] = useState(false);
+  const [completionMetrics, setCompletionMetrics] = useState<CompletionMetrics>({});
 
   const activeAction = useMemo(
     () => actionMap.find((item) => item.status === currentJob?.status),
@@ -63,10 +92,37 @@ export function JobsScreen() {
       return;
     }
 
+    if (activeAction.endpoint === 'complete') {
+      setCompletionMetrics(extractCompletionMetrics(activeAction.payload));
+      setDeliveryProofVisible(true);
+      return;
+    }
+
     try {
       await runTripAction(currentJob.id, activeAction.endpoint, activeAction.payload);
     } catch {
       Alert.alert('Action failed', 'Could not update trip state.');
+    }
+  };
+
+  const submitDeliveryProof = async (payload: DeliveryProofSubmission) => {
+    if (!currentJob) {
+      Alert.alert('No active trip', 'Trip is no longer active. Refresh jobs and try again.');
+      return;
+    }
+
+    setDeliveryProofSubmitting(true);
+    try {
+      await completeTripWithDeliveryProof(currentJob.id, {
+        ...payload,
+        ...completionMetrics
+      });
+      setDeliveryProofVisible(false);
+      setCompletionMetrics({});
+    } catch {
+      Alert.alert('Completion failed', 'Could not upload delivery proof. Check network and retry.');
+    } finally {
+      setDeliveryProofSubmitting(false);
     }
   };
 
@@ -185,6 +241,15 @@ export function JobsScreen() {
           )}
         </View>
       </ScrollView>
+      <DeliveryProofModal
+        visible={deliveryProofVisible}
+        submitting={deliveryProofSubmitting}
+        onClose={() => {
+          setDeliveryProofVisible(false);
+          setCompletionMetrics({});
+        }}
+        onSubmit={submitDeliveryProof}
+      />
     </SafeAreaView>
   );
 }

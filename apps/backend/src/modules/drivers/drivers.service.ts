@@ -21,23 +21,24 @@ import { UpdateDriverSubscriptionDto } from './dto/update-driver-subscription.dt
 const ONLINE_GEO_KEY = 'drivers:online';
 const BUSY_GEO_KEY = 'drivers:busy';
 const DRIVER_TRIAL_DAYS = 90;
+const STARTER_RIDE_CAP = 50;
 
 const SUBSCRIPTION_MONTHLY_FEE: Record<DriverSubscriptionPlan, number | null> = {
-  [DriverSubscriptionPlan.GO]: 500,
-  [DriverSubscriptionPlan.PRO]: 1000,
+  [DriverSubscriptionPlan.GO]: 1000,
+  [DriverSubscriptionPlan.PRO]: 1500,
   [DriverSubscriptionPlan.ENTERPRISE]: null
 };
 
 const SUBSCRIPTION_COPY: Record<DriverSubscriptionPlan, string[]> = {
   [DriverSubscriptionPlan.GO]: [
-    'Access all local trips',
-    'Basic driver support',
-    'Ideal for solo operators'
+    'INR 1000 / month after trial',
+    `Up to ${STARTER_RIDE_CAP} completed rides per month`,
+    'Best for part-time or new drivers'
   ],
   [DriverSubscriptionPlan.PRO]: [
-    'Priority dispatch boost',
-    'Faster support response',
-    'Designed for power drivers'
+    'INR 1500 / month after trial',
+    'Unlimited completed rides per month',
+    'Best for full-time drivers'
   ],
   [DriverSubscriptionPlan.ENTERPRISE]: [
     'Fleet-level support',
@@ -378,10 +379,15 @@ export class DriversService implements OnModuleInit {
   }
 
   private buildSubscriptionCatalog() {
-    return (Object.values(DriverSubscriptionPlan) as DriverSubscriptionPlan[]).map((plan) => ({
+    const visiblePlans: DriverSubscriptionPlan[] = [
+      DriverSubscriptionPlan.GO,
+      DriverSubscriptionPlan.PRO
+    ];
+
+    return visiblePlans.map((plan) => ({
       plan,
       monthlyFeeInr: SUBSCRIPTION_MONTHLY_FEE[plan],
-      billing: plan === DriverSubscriptionPlan.ENTERPRISE ? 'contract' : 'monthly',
+      billing: 'monthly',
       features: SUBSCRIPTION_COPY[plan]
     }));
   }
@@ -591,7 +597,20 @@ export class DriversService implements OnModuleInit {
       : 0;
     const monthlyFee = SUBSCRIPTION_MONTHLY_FEE[driver.subscriptionPlan];
     const includesToday = from.getTime() <= now.getTime() && to.getTime() >= now.getTime();
-    const subscriptionFeeInRange = !trialActive && includesToday && monthlyFee ? monthlyFee : 0;
+    let subscriptionFeeInRange = !trialActive && includesToday && monthlyFee ? monthlyFee : 0;
+    const starterLimitExceeded =
+      driver.subscriptionPlan === DriverSubscriptionPlan.GO &&
+      completedTrips.length > STARTER_RIDE_CAP;
+
+    if (
+      !trialActive &&
+      includesToday &&
+      starterLimitExceeded &&
+      SUBSCRIPTION_MONTHLY_FEE[DriverSubscriptionPlan.PRO]
+    ) {
+      subscriptionFeeInRange = SUBSCRIPTION_MONTHLY_FEE[DriverSubscriptionPlan.PRO] ?? subscriptionFeeInRange;
+    }
+
     const roundedSummary = {
       grossFare: Number(summary.grossFare.toFixed(2)),
       waitingCharges: Number(summary.waitingCharges.toFixed(2)),
@@ -619,6 +638,14 @@ export class DriversService implements OnModuleInit {
         },
         note: trialActive
           ? `Trial active: drivers keep 100% ride earnings for first ${DRIVER_TRIAL_DAYS} days.`
+          : driver.subscriptionPlan === DriverSubscriptionPlan.GO
+            ? starterLimitExceeded
+              ? `Starter plan crossed ${STARTER_RIDE_CAP} rides in current period. Billing adjusted to INR ${
+                  SUBSCRIPTION_MONTHLY_FEE[DriverSubscriptionPlan.PRO] ?? 1500
+                } for unlimited usage.`
+              : `Starter plan: INR ${monthlyFee ?? 1000} per month for up to ${STARTER_RIDE_CAP} completed rides.`
+            : driver.subscriptionPlan === DriverSubscriptionPlan.PRO
+              ? `Unlimited plan: INR ${monthlyFee ?? 1500} per month with no ride cap.`
           : driver.subscriptionPlan === DriverSubscriptionPlan.ENTERPRISE
             ? 'Enterprise plan billing is managed by sales contracts.'
             : `Monthly subscription fee: INR ${monthlyFee ?? 0}.`

@@ -4,6 +4,9 @@ import appConfig from '../../app.json';
 
 const configuredApiBaseUrlRaw = (appConfig as { expo?: { extra?: { apiBaseUrl?: unknown } } }).expo
   ?.extra?.apiBaseUrl;
+const configuredSupportPhoneRaw = (
+  appConfig as { expo?: { extra?: { supportPhone?: unknown } } }
+).expo?.extra?.supportPhone;
 
 function normalizeConfiguredApiBaseUrl(value: string): string {
   let next = value.trim();
@@ -56,6 +59,10 @@ function resolveApiBaseUrl() {
 
 export const API_BASE_URL = resolveApiBaseUrl();
 export const REALTIME_BASE_URL = API_BASE_URL.replace(/\/api$/, '');
+export const SUPPORT_PHONE =
+  typeof configuredSupportPhoneRaw === 'string' && configuredSupportPhoneRaw.trim()
+    ? configuredSupportPhoneRaw.trim()
+    : '9844259899';
 
 const api = axios.create({
   baseURL: API_BASE_URL,

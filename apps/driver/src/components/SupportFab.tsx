@@ -1,14 +1,17 @@
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useDriverI18n } from '../i18n/useDriverI18n';
 import { colors, radius, spacing, typography } from '../theme';
-
-const SUPPORT_NUMBER = '9844259899';
+import type { DriverTabParamList } from '../types';
+import { SUPPORT_PHONE } from '../services/api';
 
 export function SupportFab() {
   const { t } = useDriverI18n();
+  const navigation = useNavigation<BottomTabNavigationProp<DriverTabParamList>>();
 
   const callSupport = async () => {
-    const url = `tel:${SUPPORT_NUMBER}`;
+    const url = `tel:${SUPPORT_PHONE}`;
     const canOpen = await Linking.canOpenURL(url);
     if (canOpen) {
       await Linking.openURL(url);
@@ -17,9 +20,13 @@ export function SupportFab() {
 
   return (
     <View pointerEvents="box-none" style={styles.root}>
-      <Pressable style={styles.button} onPress={() => void callSupport()}>
+      <Pressable
+        style={styles.button}
+        onPress={() => navigation.navigate('Support')}
+        onLongPress={() => void callSupport()}
+      >
         <Text style={styles.title}>{t('home.support')}</Text>
-        <Text style={styles.sub}>{SUPPORT_NUMBER}</Text>
+        <Text style={styles.sub}>{SUPPORT_PHONE}</Text>
       </Pressable>
     </View>
   );

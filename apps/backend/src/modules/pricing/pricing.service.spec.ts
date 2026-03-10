@@ -3,15 +3,28 @@ import { PricingService } from './pricing.service';
 
 describe('PricingService', () => {
   const pricingRuleFindFirst = jest.fn();
+  const configGet = jest.fn();
 
   const service = new PricingService({
     pricingRule: {
       findFirst: pricingRuleFindFirst
     }
+  } as any, {
+    get: configGet
   } as any);
 
   beforeEach(() => {
     pricingRuleFindFirst.mockReset();
+    configGet.mockReset();
+    configGet.mockImplementation((key: string) => {
+      if (key === 'baseFarePerKm') {
+        return 14;
+      }
+      if (key === 'alwaysOnDiscountPercent') {
+        return 8;
+      }
+      return undefined;
+    });
   });
 
   it('returns fallback rating multiplier when no custom rule exists', async () => {
@@ -43,6 +56,8 @@ describe('PricingService', () => {
     expect(estimate.baseFare).toBe(420);
     expect(estimate.distanceFare).toBe(280);
     expect(estimate.insuranceCharge).toBe(800);
-    expect(estimate.total).toBeGreaterThan(1000);
+    expect(estimate.compareAtTotal).toBeGreaterThan(estimate.total);
+    expect(estimate.offerDiscountPercent).toBe(8);
+    expect(estimate.offerDiscountAmount).toBeGreaterThan(0);
   });
 });

@@ -1,7 +1,21 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UnauthorizedException,
+  UseGuards
+} from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { ReviewKycDto } from './dto/review-kyc.dto';
+import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
+import { CurrentUser, RequestUser } from '../../common/decorators/current-user.decorator';
+import { AdminOperationsBookingsQueryDto } from './dto/admin-operations-bookings-query.dto';
+import { AdminOperationsRidesQueryDto } from './dto/admin-operations-rides-query.dto';
 
+@UseGuards(AdminAuthGuard)
 @Controller('admin')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
@@ -36,25 +50,46 @@ export class AdminController {
     return this.adminService.complianceOverview();
   }
 
+  @Get('operations/summary')
+  operationsSummary() {
+    return this.adminService.operationsSummary();
+  }
+
+  @Get('operations/bookings')
+  operationsBookings(@Query() query: AdminOperationsBookingsQueryDto) {
+    return this.adminService.operationsBookings(query);
+  }
+
+  @Get('operations/rides')
+  operationsRides(@Query() query: AdminOperationsRidesQueryDto) {
+    return this.adminService.operationsRides(query);
+  }
+
   @Get('kyc/pending')
   pendingKyc() {
     return this.adminService.pendingKycReview();
   }
 
   @Post('kyc/:verificationId/approve')
-  approveKyc(@Param('verificationId') verificationId: string, @Body() payload: ReviewKycDto) {
-    return this.adminService.approveKyc(
-      verificationId,
-      payload.adminUserId ?? 'system-admin'
-    );
+  approveKyc(
+    @Param('verificationId') verificationId: string,
+    @CurrentUser() user: RequestUser | null
+  ) {
+    if (!user?.userId) {
+      throw new UnauthorizedException('Admin authentication required');
+    }
+    return this.adminService.approveKyc(verificationId, user.userId);
   }
 
   @Post('kyc/:verificationId/reject')
-  rejectKyc(@Param('verificationId') verificationId: string, @Body() payload: ReviewKycDto) {
-    return this.adminService.rejectKyc(
-      verificationId,
-      payload.adminUserId ?? 'system-admin',
-      payload.reason ?? 'Rejected by admin review'
-    );
+  rejectKyc(
+    @Param('verificationId') verificationId: string,
+    @Body() payload: ReviewKycDto,
+    @CurrentUser() user: RequestUser | null
+  ) {
+    if (!user?.userId) {
+      throw new UnauthorizedException('Admin authentication required');
+    }
+    return this.adminService.rejectKyc(verificationId, user.userId, payload.reason ?? 'Rejected by admin review');
   }
 }

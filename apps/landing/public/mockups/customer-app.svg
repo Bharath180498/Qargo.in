@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="t d">
+  <title id="t">Customer app dummy screenshot</title>
+  <desc id="d">Placeholder screen for booking and tracking interface.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff4e5"/>
+      <stop offset="1" stop-color="#ffe9ce"/>
+    </linearGradient>
+    <linearGradient id="cta" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff9f4b"/>
+      <stop offset="1" stop-color="#f36a3b"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="720" fill="url(#bg)"/>
+  <rect x="40" y="36" width="1120" height="66" rx="18" fill="#ffffff" stroke="#e8caa3"/>
+  <circle cx="84" cy="69" r="16" fill="#213243"/>
+  <rect x="112" y="56" width="260" height="24" rx="8" fill="#1f3345" fill-opacity="0.13"/>
+  <rect x="910" y="55" width="220" height="26" rx="13" fill="#eff7ff" stroke="#c5dbf5"/>
+
+  <rect x="70" y="132" width="1060" height="206" rx="28" fill="#ffffff" stroke="#e8caa3"/>
+  <rect x="108" y="170" width="480" height="30" rx="10" fill="#25374a" fill-opacity="0.16"/>
+  <rect x="108" y="214" width="620" height="22" rx="10" fill="#25374a" fill-opacity="0.12"/>
+  <rect x="108" y="254" width="260" height="22" rx="10" fill="#25374a" fill-opacity="0.12"/>
+  <rect x="108" y="294" width="220" height="50" rx="25" fill="url(#cta)"/>
+  <rect x="348" y="294" width="220" height="50" rx="25" fill="#f8fbff" stroke="#b7cde6"/>
+
+  <rect x="70" y="360" width="340" height="272" rx="20" fill="#ffffff" stroke="#e8caa3"/>
+  <rect x="430" y="360" width="340" height="272" rx="20" fill="#ffffff" stroke="#e8caa3"/>
+  <rect x="790" y="360" width="340" height="272" rx="20" fill="#ffffff" stroke="#e8caa3"/>
+
+  <rect x="96" y="392" width="110" height="16" rx="8" fill="#5f5a54" fill-opacity="0.26"/>
+  <rect x="96" y="420" width="272" height="20" rx="10" fill="#1f3345" fill-opacity="0.14"/>
+  <rect x="96" y="452" width="248" height="20" rx="10" fill="#1f3345" fill-opacity="0.14"/>
+
+  <rect x="456" y="392" width="110" height="16" rx="8" fill="#5f5a54" fill-opacity="0.26"/>
+  <rect x="456" y="420" width="272" height="20" rx="10" fill="#1f3345" fill-opacity="0.14"/>
+  <rect x="456" y="452" width="248" height="20" rx="10" fill="#1f3345" fill-opacity="0.14"/>
+
+  <rect x="816" y="392" width="110" height="16" rx="8" fill="#5f5a54" fill-opacity="0.26"/>
+  <rect x="816" y="420" width="272" height="20" rx="10" fill="#1f3345" fill-opacity="0.14"/>
+  <rect x="816" y="452" width="248" height="20" rx="10" fill="#1f3345" fill-opacity="0.14"/>
+
+  <text x="76" y="686" fill="#1f3345" fill-opacity="0.62" font-family="Arial, sans-serif" font-size="22">Dummy preview: customer booking and tracking</text>
+</svg>

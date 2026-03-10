@@ -14,8 +14,8 @@ import { colors, radius, spacing, typography } from '../../theme';
 import { useDriverAppStore } from '../../store/useDriverAppStore';
 
 const PLAN_LABELS: Record<'GO' | 'PRO' | 'ENTERPRISE', string> = {
-  GO: 'Go',
-  PRO: 'Pro',
+  GO: 'Starter (50 rides)',
+  PRO: 'Unlimited',
   ENTERPRISE: 'Enterprise'
 };
 
@@ -75,21 +75,23 @@ export function EarningsScreen() {
       subscriptionCatalog?.options ?? [
         {
           plan: 'GO' as const,
-          monthlyFeeInr: 500,
+          monthlyFeeInr: 1000,
           billing: 'monthly' as const,
-          features: ['Access all local trips', 'Basic support', 'Solo driver plan']
+          features: [
+            'Free first 90 days',
+            'INR 1000 / month after trial',
+            'Up to 50 completed rides per month'
+          ]
         },
         {
           plan: 'PRO' as const,
-          monthlyFeeInr: 1000,
+          monthlyFeeInr: 1500,
           billing: 'monthly' as const,
-          features: ['Priority dispatch', 'Support priority', 'Pro tools']
-        },
-        {
-          plan: 'ENTERPRISE' as const,
-          monthlyFeeInr: null,
-          billing: 'contract' as const,
-          features: ['Fleet support', 'Contract billing', 'Enterprise workflows']
+          features: [
+            'Free first 90 days',
+            'INR 1500 / month after trial',
+            'Unlimited completed rides per month'
+          ]
         }
       ],
     [subscriptionCatalog?.options]
@@ -150,7 +152,9 @@ export function EarningsScreen() {
     const description =
       plan === 'ENTERPRISE'
         ? 'We will submit your enterprise request and our team will contact you.'
-        : 'Your driver account will switch to this plan immediately.';
+        : plan === 'GO'
+          ? 'Starter plan allows up to 50 completed rides per month.'
+          : 'Unlimited plan allows unlimited completed rides per month.';
 
     Alert.alert('Confirm plan change', [description, feeLine, trialLine].filter(Boolean).join('\n\n'), [
       { text: 'Cancel', style: 'cancel' },
@@ -159,12 +163,16 @@ export function EarningsScreen() {
   };
 
   const enterpriseRequest = subscriptionCatalog?.enterpriseRequest;
+  const showEnterpriseCard = planOptions.some((option) => option.plan === 'ENTERPRISE');
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.title}>Earnings</Text>
-        <Text style={styles.subtitle}>Drivers keep 100% trip earnings during trial. Choose your monthly plan any time.</Text>
+        <Text style={styles.subtitle}>
+          First 90 days are free. After trial: Starter INR 1000/month (up to 50 rides) or Unlimited INR
+          1500/month.
+        </Text>
 
         <View style={[styles.card, styles.highlightCard]}>
           <Text style={styles.metricLabel}>Take-home (30d)</Text>
@@ -221,37 +229,41 @@ export function EarningsScreen() {
           ) : null}
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Enterprise request details</Text>
-          <Text style={styles.subscriptionHint}>Add notes before choosing Enterprise to speed up approval.</Text>
-          <TextInput
-            style={[styles.input, styles.inputMultiline]}
-            value={enterpriseNotes}
-            onChangeText={setEnterpriseNotes}
-            placeholder="Example: 15 trucks in Bengaluru with daily bulk loads"
-            placeholderTextColor={colors.mutedText}
-            multiline
-            numberOfLines={3}
-          />
-          <TextInput
-            style={styles.input}
-            value={fleetSize}
-            onChangeText={setFleetSize}
-            placeholder="Fleet size (optional)"
-            placeholderTextColor={colors.mutedText}
-            keyboardType="number-pad"
-          />
-          {enterpriseRequest ? (
-            <View style={styles.enterpriseStatusBox}>
-              <Text style={styles.enterpriseStatusTitle}>Latest request</Text>
-              <Text style={styles.subscriptionHint}>Status: {enterpriseRequest.status}</Text>
-              <Text style={styles.subscriptionHint}>Requested: {formatDate(enterpriseRequest.createdAt)}</Text>
-              {enterpriseRequest.notes ? <Text style={styles.subscriptionHint}>Note: {enterpriseRequest.notes}</Text> : null}
-            </View>
-          ) : (
-            <Text style={styles.subscriptionHint}>No enterprise request submitted yet.</Text>
-          )}
-        </View>
+        {showEnterpriseCard ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Enterprise request details</Text>
+            <Text style={styles.subscriptionHint}>Add notes before choosing Enterprise to speed up approval.</Text>
+            <TextInput
+              style={[styles.input, styles.inputMultiline]}
+              value={enterpriseNotes}
+              onChangeText={setEnterpriseNotes}
+              placeholder="Example: 15 trucks in Bengaluru with daily bulk loads"
+              placeholderTextColor={colors.mutedText}
+              multiline
+              numberOfLines={3}
+            />
+            <TextInput
+              style={styles.input}
+              value={fleetSize}
+              onChangeText={setFleetSize}
+              placeholder="Fleet size (optional)"
+              placeholderTextColor={colors.mutedText}
+              keyboardType="number-pad"
+            />
+            {enterpriseRequest ? (
+              <View style={styles.enterpriseStatusBox}>
+                <Text style={styles.enterpriseStatusTitle}>Latest request</Text>
+                <Text style={styles.subscriptionHint}>Status: {enterpriseRequest.status}</Text>
+                <Text style={styles.subscriptionHint}>Requested: {formatDate(enterpriseRequest.createdAt)}</Text>
+                {enterpriseRequest.notes ? (
+                  <Text style={styles.subscriptionHint}>Note: {enterpriseRequest.notes}</Text>
+                ) : null}
+              </View>
+            ) : (
+              <Text style={styles.subscriptionHint}>No enterprise request submitted yet.</Text>
+            )}
+          </View>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );

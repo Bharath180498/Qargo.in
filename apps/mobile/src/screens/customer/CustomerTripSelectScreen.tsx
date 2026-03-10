@@ -687,10 +687,17 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
               const meta = VEHICLE_UI_META[quote.vehicleType as VehicleType];
               const active = selectedVehicle?.vehicleType === quote.vehicleType;
               const displayedNearbyDrivers = quote.availableDrivers + virtualTruckMarkers.length;
-              const rawPrice =
-                quote.pricing.multiplier > 0 && quote.pricing.multiplier < 1
-                  ? quote.pricing.total / quote.pricing.multiplier
-                  : null;
+              const compareAtPrice =
+                typeof quote.pricing.compareAtTotal === 'number' &&
+                Number.isFinite(quote.pricing.compareAtTotal) &&
+                quote.pricing.compareAtTotal > quote.pricing.total
+                  ? quote.pricing.compareAtTotal
+                  : quote.pricing.total > 0
+                    ? quote.pricing.total / 0.92
+                    : quote.pricing.total;
+              const savingsAmount = Math.max(0, compareAtPrice - quote.pricing.total);
+              const savingsPercent =
+                compareAtPrice > 0 ? Math.round((savingsAmount / compareAtPrice) * 100) : 0;
               const badge = formatPromoTag({
                 cheapest: cheapestTotal !== undefined && quote.pricing.total === cheapestTotal,
                 fastest: fastestEta !== undefined && quote.etaMinutes === fastestEta,
@@ -725,9 +732,11 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
 
                       <View style={styles.tripPriceGroup}>
                         <Text style={styles.tripPrice}>INR {quote.pricing.total.toFixed(0)}</Text>
-                        {rawPrice ? (
-                          <Text style={styles.tripPriceStruck}>INR {Math.round(rawPrice).toFixed(0)}</Text>
-                        ) : null}
+                        <Text style={styles.tripPriceStruck}>INR {Math.round(compareAtPrice).toFixed(0)}</Text>
+                        <Text style={styles.tripSavings}>
+                          Save INR {Math.round(savingsAmount).toFixed(0)}
+                          {savingsPercent > 0 ? ` (${savingsPercent}% OFF)` : ''}
+                        </Text>
                       </View>
                     </View>
 
@@ -742,7 +751,7 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
                         <Text style={styles.tripBadgeText}>{badge.label}</Text>
                       </View>
                       <Text style={styles.tripMetaSecondary}>
-                        {displayedNearbyDrivers} nearby trucks · Multiplier x{quote.pricing.multiplier.toFixed(2)}
+                        {displayedNearbyDrivers} nearby trucks · Offer {quote.pricing.offerDiscountPercent ?? 8}% OFF
                       </Text>
                     </View>
                   </View>
@@ -1081,6 +1090,11 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_500Medium',
     fontSize: 11,
     textDecorationLine: 'line-through'
+  },
+  tripSavings: {
+    color: '#15803D',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 10
   },
   tripMetaRow: {
     flexDirection: 'row',

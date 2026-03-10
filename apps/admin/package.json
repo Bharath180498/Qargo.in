@@ -2,6 +2,9 @@
   "name": "@porter/admin",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=18.17.0"
+  },
   "scripts": {
     "dev": "unset npm_config_workspace npm_config_workspaces && NEXT_TELEMETRY_DISABLED=1 NEXT_IGNORE_INCORRECT_LOCKFILE=1 next dev",
     "build": "unset npm_config_workspace npm_config_workspaces && NEXT_TELEMETRY_DISABLED=1 NEXT_IGNORE_INCORRECT_LOCKFILE=1 next build",

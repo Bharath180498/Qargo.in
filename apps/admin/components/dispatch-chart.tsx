@@ -25,9 +25,9 @@ export function DispatchChartWithData({
   values: number[];
 }) {
   return (
-    <div className="rounded-3xl border border-orange-200 bg-white p-5 shadow-soft">
-      <h3 className="font-sora text-lg text-brand-accent">Dispatch Latency Trend</h3>
-      <p className="mb-4 font-manrope text-sm text-slate-600">Median time to assign a driver (seconds)</p>
+    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 backdrop-blur">
+      <h3 className="font-sora text-lg text-slate-100">Dispatch Latency Trend</h3>
+      <p className="mb-3 font-manrope text-xs text-slate-400">Median time to assign a driver (seconds)</p>
       <Line
         data={{
           labels,
@@ -35,8 +35,8 @@ export function DispatchChartWithData({
             {
               label: 'Assignment Time',
               data: values,
-              borderColor: '#F97316',
-              backgroundColor: 'rgba(249, 115, 22, 0.25)',
+              borderColor: '#22d3ee',
+              backgroundColor: 'rgba(34, 211, 238, 0.2)',
               tension: 0.35
             }
           ]
@@ -51,18 +51,18 @@ export function DispatchChartWithData({
           scales: {
             y: {
               ticks: {
-                color: '#475569'
+                color: '#94a3b8'
               },
               grid: {
-                color: 'rgba(148, 163, 184, 0.2)'
+                color: 'rgba(71, 85, 105, 0.35)'
               }
             },
             x: {
               ticks: {
-                color: '#475569'
+                color: '#94a3b8'
               },
               grid: {
-                color: 'rgba(148, 163, 184, 0.15)'
+                color: 'rgba(71, 85, 105, 0.2)'
               }
             }
           }

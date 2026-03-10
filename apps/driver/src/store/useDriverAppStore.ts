@@ -74,6 +74,16 @@ interface UpdateSubscriptionResult {
   };
 }
 
+interface DeliveryProofPayload {
+  receiverName: string;
+  receiverSignature: string;
+  photoUri: string;
+  photoFileName: string;
+  photoContentType: string;
+  distanceKm?: number;
+  durationMinutes?: number;
+}
+
 interface DriverAppState {
   driverProfileId?: string;
   availabilityStatus?: 'ONLINE' | 'OFFLINE' | 'BUSY';
@@ -103,6 +113,7 @@ interface DriverAppState {
   acceptOffer: (offerId: string) => Promise<void>;
   rejectOffer: (offerId: string) => Promise<void>;
   runTripAction: (tripId: string, endpoint: string, payload?: Record<string, unknown>) => Promise<void>;
+  completeTripWithDeliveryProof: (tripId: string, payload: DeliveryProofPayload) => Promise<void>;
   connectRealtime: () => void;
   disconnectRealtime: () => void;
 }
@@ -316,6 +327,67 @@ export const useDriverAppStore = create<DriverAppState>((set, get) => ({
     } catch (error: unknown) {
       set({
         error: readError(error, 'Failed to perform trip action')
+      });
+      throw error;
+    }
+  },
+  async completeTripWithDeliveryProof(tripId, payload) {
+    const driverProfileId = get().driverProfileId;
+    if (!driverProfileId) {
+      throw new Error('Driver profile not ready yet.');
+    }
+
+    const requestedContentType = payload.photoContentType.trim() || 'image/jpeg';
+    const requestedFileName = payload.photoFileName.trim() || 'delivery-proof.jpg';
+
+    try {
+      const upload = await api.post(`/trips/${tripId}/delivery-proof/upload-url`, {
+        driverId: driverProfileId,
+        fileName: requestedFileName,
+        contentType: requestedContentType
+      });
+
+      const uploadUrl = String(upload.data?.uploadUrl ?? '');
+      const fileUrl = String(upload.data?.fileUrl ?? '');
+      const fileKey = String(upload.data?.fileKey ?? '');
+      const resolvedContentType = String(upload.data?.contentType ?? requestedContentType);
+
+      if (!fileUrl || !fileKey) {
+        throw new Error('Delivery proof upload endpoint returned invalid file metadata');
+      }
+
+      if (uploadUrl && !uploadUrl.startsWith('mock://')) {
+        const fileResponse = await fetch(payload.photoUri);
+        if (!fileResponse.ok) {
+          throw new Error('Could not load delivery photo from device');
+        }
+
+        const blob = await fileResponse.blob();
+        const putResponse = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': resolvedContentType
+          },
+          body: blob
+        });
+
+        if (!putResponse.ok) {
+          throw new Error('Could not upload delivery proof photo');
+        }
+      }
+
+      await get().runTripAction(tripId, 'complete', {
+        receiverName: payload.receiverName,
+        receiverSignature: payload.receiverSignature,
+        deliveryPhotoFileKey: fileKey,
+        deliveryPhotoUrl: fileUrl,
+        deliveryPhotoMimeType: resolvedContentType,
+        distanceKm: payload.distanceKm,
+        durationMinutes: payload.durationMinutes
+      });
+    } catch (error: unknown) {
+      set({
+        error: readError(error, 'Failed to complete trip with delivery proof')
       });
       throw error;
     }

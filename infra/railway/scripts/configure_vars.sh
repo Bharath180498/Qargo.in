@@ -35,6 +35,8 @@ UPI_PAYEE_NAME_INPUT="${UPI_PAYEE_NAME:-Qargo Logistics}"
 EWAY_BILL_API_KEY_INPUT="${EWAY_BILL_API_KEY:-replace-me}"
 INSURANCE_API_URL_INPUT="${INSURANCE_API_URL:-replace-me}"
 INSURANCE_API_KEY_INPUT="${INSURANCE_API_KEY:-replace-me}"
+ADMIN_PASSCODE_INPUT="${ADMIN_PASSCODE:-change-me-admin-passcode}"
+SUPPORT_PHONE_INPUT="${SUPPORT_PHONE:-9844259899}"
 SKIP_ADMIN="false"
 
 usage() {
@@ -76,6 +78,8 @@ Usage:
     [--eway-bill-api-key your-key] \
     [--insurance-api-url https://insurance.example] \
     [--insurance-api-key your-key] \
+    [--admin-passcode launch-admin-passcode] \
+    [--support-phone 9844259899] \
     [--skip-admin] \
     [--jwt-secret your-secret]
 
@@ -245,6 +249,14 @@ while [[ $# -gt 0 ]]; do
       INSURANCE_API_KEY_INPUT="$2"
       shift 2
       ;;
+    --admin-passcode)
+      ADMIN_PASSCODE_INPUT="$2"
+      shift 2
+      ;;
+    --support-phone)
+      SUPPORT_PHONE_INPUT="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -293,6 +305,8 @@ set_var "$BACKEND_SERVICE" "DATABASE_URL=$db_ref"
 set_var "$BACKEND_SERVICE" "REDIS_URL=$redis_ref"
 set_var "$BACKEND_SERVICE" "JWT_SECRET=$JWT_SECRET_INPUT"
 set_var "$BACKEND_SERVICE" "JWT_EXPIRES_IN=7d"
+set_var "$BACKEND_SERVICE" "ADMIN_PASSCODE=$ADMIN_PASSCODE_INPUT"
+set_var "$BACKEND_SERVICE" "SUPPORT_PHONE=$SUPPORT_PHONE_INPUT"
 set_var "$BACKEND_SERVICE" "NODE_ENV=production"
 set_var "$BACKEND_SERVICE" "AUTH_MODE=otp"
 set_var "$BACKEND_SERVICE" "OTP_PROVIDER=$OTP_PROVIDER_VALUE"

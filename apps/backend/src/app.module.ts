@@ -21,6 +21,7 @@ import { HealthModule } from './modules/health/health.module';
 import { DriverOnboardingModule } from './modules/driver-onboarding/driver-onboarding.module';
 import { KycModule } from './modules/kyc/kyc.module';
 import { MapsModule } from './modules/maps/maps.module';
+import { SupportModule } from './modules/support/support.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { MapsModule } from './modules/maps/maps.module';
     OrdersModule,
     TripsModule,
     KycModule,
+    SupportModule,
     MapsModule,
     AdminModule,
     HealthModule

@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { AvailabilityStatus, OrderStatus, TripStatus } from '@prisma/client';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { AvailabilityStatus, OrderStatus, Prisma, TripStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -7,9 +7,12 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { DispatchService } from '../dispatch/dispatch.service';
 import { CompleteTripDto } from './dto/complete-trip.dto';
 import { RateTripDto } from './dto/rate-trip.dto';
+import { GenerateDeliveryProofUploadUrlDto } from './dto/generate-delivery-proof-upload-url.dto';
 
 @Injectable()
 export class TripsService {
+  private static readonly DELIVERY_PROOF_SIGNATURE_POINT_MIN = 6;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -22,6 +25,106 @@ export class TripsService {
     return this.configService.get<number>('waitingRatePerMinute') ?? 3;
   }
 
+  private buildSafeFileName(fileName: string) {
+    const trimmed = fileName.trim();
+    if (!trimmed) {
+      return `delivery-proof-${Date.now()}.jpg`;
+    }
+
+    const normalized = trimmed.replace(/[^a-zA-Z0-9._-]/g, '_');
+    return normalized.slice(-120) || `delivery-proof-${Date.now()}.jpg`;
+  }
+
+  private parseReceiverSignature(rawPayload: string) {
+    let parsed: unknown;
+
+    try {
+      parsed = JSON.parse(rawPayload);
+    } catch {
+      throw new BadRequestException('Receiver signature is invalid JSON');
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
+      throw new BadRequestException('Receiver signature payload is missing');
+    }
+
+    const signature = parsed as {
+      width?: unknown;
+      height?: unknown;
+      capturedAt?: unknown;
+      strokes?: unknown;
+    };
+
+    const width = Number(signature.width);
+    const height = Number(signature.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      throw new BadRequestException('Receiver signature canvas dimensions are invalid');
+    }
+
+    if (!Array.isArray(signature.strokes) || signature.strokes.length === 0) {
+      throw new BadRequestException('Receiver signature is required');
+    }
+
+    let totalPoints = 0;
+    const normalizedStrokes = signature.strokes
+      .map((stroke) => {
+        if (!Array.isArray(stroke)) {
+          return [] as Array<{ x: number; y: number }>;
+        }
+
+        const points = stroke
+          .map((point) => {
+            if (!point || typeof point !== 'object') {
+              return null;
+            }
+
+            const candidate = point as { x?: unknown; y?: unknown };
+            const x = Number(candidate.x);
+            const y = Number(candidate.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+              return null;
+            }
+
+            return {
+              x: Number(x.toFixed(2)),
+              y: Number(y.toFixed(2))
+            };
+          })
+          .filter((point): point is { x: number; y: number } => point !== null);
+
+        totalPoints += points.length;
+        return points;
+      })
+      .filter((stroke) => stroke.length > 1);
+
+    if (
+      normalizedStrokes.length === 0 ||
+      totalPoints < TripsService.DELIVERY_PROOF_SIGNATURE_POINT_MIN
+    ) {
+      throw new BadRequestException('Receiver signature is too short');
+    }
+
+    let signatureCapturedAt: Date | undefined;
+    if (typeof signature.capturedAt === 'string' && signature.capturedAt.trim()) {
+      const parsedDate = new Date(signature.capturedAt);
+      if (!Number.isNaN(parsedDate.getTime())) {
+        signatureCapturedAt = parsedDate;
+      }
+    }
+
+    const signatureJson = {
+      width: Number(width.toFixed(2)),
+      height: Number(height.toFixed(2)),
+      capturedAt: signatureCapturedAt?.toISOString() ?? new Date().toISOString(),
+      strokes: normalizedStrokes
+    } satisfies Prisma.InputJsonValue;
+
+    return {
+      signatureJson,
+      signatureCapturedAt
+    };
+  }
+
   async findById(tripId: string) {
     const trip = await this.prisma.trip.findUnique({
       where: { id: tripId },
@@ -32,7 +135,8 @@ export class TripsService {
             user: true
           }
         },
-        rating: true
+        rating: true,
+        deliveryProof: true
       }
     });
 
@@ -63,6 +167,48 @@ export class TripsService {
     if (tripDriverId !== requestedDriverId) {
       throw new NotFoundException('Driver not assigned to this trip');
     }
+  }
+
+  async generateDeliveryProofUploadUrl(
+    tripId: string,
+    payload: GenerateDeliveryProofUploadUrlDto
+  ) {
+    const trip = await this.getTrip(tripId);
+    this.assertDriver(trip.driverId, payload.driverId);
+
+    if (trip.status !== TripStatus.IN_TRANSIT) {
+      throw new BadRequestException('Delivery proof can only be added while trip is in transit');
+    }
+
+    const normalizedContentType = payload.contentType.trim().toLowerCase();
+    if (!normalizedContentType.startsWith('image/')) {
+      throw new BadRequestException('Delivery proof photo must be an image');
+    }
+
+    const safeFileName = this.buildSafeFileName(payload.fileName);
+    const fileKey = `delivery-proofs/${tripId}/photo-${Date.now()}-${safeFileName}`;
+    const endpoint = this.configService.get<string>('s3.endpoint') ?? '';
+    const bucket = this.configService.get<string>('s3.bucket') ?? '';
+    const region = this.configService.get<string>('s3.region') ?? 'auto';
+
+    if (!endpoint || !bucket) {
+      return {
+        fileKey,
+        uploadUrl: `mock://upload/${fileKey}`,
+        fileUrl: `https://mock-storage.local/${fileKey}`,
+        contentType: normalizedContentType,
+        mode: 'mock-storage'
+      };
+    }
+
+    const base = endpoint.replace(/\/$/, '');
+    return {
+      fileKey,
+      uploadUrl: `${base}/${bucket}/${fileKey}?signed=mock-signature`,
+      fileUrl: `${base}/${bucket}/${fileKey}`,
+      contentType: normalizedContentType,
+      mode: `s3-${region}`
+    };
   }
 
   async accept(tripId: string, driverId: string) {
@@ -225,7 +371,49 @@ export class TripsService {
     const trip = await this.getTrip(tripId);
     this.assertDriver(trip.driverId, driverId);
 
+    if (trip.status !== TripStatus.IN_TRANSIT) {
+      throw new BadRequestException('Trip must be in transit before completion');
+    }
+
+    const receiverName = payload.receiverName.trim();
+    if (receiverName.length < 2) {
+      throw new BadRequestException('Receiver name is required for delivery proof');
+    }
+
+    const deliveryPhotoFileKey = payload.deliveryPhotoFileKey.trim();
+    const deliveryPhotoUrl = payload.deliveryPhotoUrl.trim();
+    if (!deliveryPhotoFileKey || !deliveryPhotoUrl) {
+      throw new BadRequestException('Delivery photo is required before completing trip');
+    }
+
+    const { signatureJson, signatureCapturedAt } = this.parseReceiverSignature(
+      payload.receiverSignature
+    );
+
     const completed = await this.prisma.$transaction(async (tx) => {
+      await tx.tripDeliveryProof.upsert({
+        where: { tripId: trip.id },
+        update: {
+          driverId,
+          receiverName,
+          receiverSignature: signatureJson,
+          signatureCapturedAt,
+          photoFileKey: deliveryPhotoFileKey,
+          photoUrl: deliveryPhotoUrl,
+          photoMimeType: payload.deliveryPhotoMimeType?.trim() || 'image/jpeg'
+        },
+        create: {
+          tripId: trip.id,
+          driverId,
+          receiverName,
+          receiverSignature: signatureJson,
+          signatureCapturedAt,
+          photoFileKey: deliveryPhotoFileKey,
+          photoUrl: deliveryPhotoUrl,
+          photoMimeType: payload.deliveryPhotoMimeType?.trim() || 'image/jpeg'
+        }
+      });
+
       const updatedTrip = await tx.trip.update({
         where: { id: trip.id },
         data: {
@@ -281,7 +469,8 @@ export class TripsService {
     this.realtimeService.emitTripUpdate(trip.orderId, 'trip:completed', {
       tripId,
       driverId,
-      nextJobActivated: activation.activated
+      nextJobActivated: activation.activated,
+      deliveryProofCaptured: true
     });
 
     return {

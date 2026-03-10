@@ -1,7 +1,9 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { PricingService } from './pricing.service';
 import { UpsertPricingRuleDto } from './dto/upsert-pricing-rule.dto';
+import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
 
+@UseGuards(AdminAuthGuard)
 @Controller('pricing')
 export class PricingController {
   constructor(private readonly pricingService: PricingService) {}

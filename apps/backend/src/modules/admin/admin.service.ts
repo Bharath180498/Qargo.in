@@ -430,8 +430,13 @@ export class AdminService {
               select: {
                 id: true,
                 receiverName: true,
+                receiverSignature: true,
                 photoUrl: true,
-                signatureCapturedAt: true
+                photoFileKey: true,
+                photoMimeType: true,
+                signatureCapturedAt: true,
+                createdAt: true,
+                updatedAt: true
               }
             }
           }
@@ -503,8 +508,13 @@ export class AdminService {
           select: {
             id: true,
             receiverName: true,
+            receiverSignature: true,
             photoUrl: true,
-            signatureCapturedAt: true
+            photoFileKey: true,
+            photoMimeType: true,
+            signatureCapturedAt: true,
+            createdAt: true,
+            updatedAt: true
           }
         },
         rating: true
@@ -514,6 +524,10 @@ export class AdminService {
 
   pendingKycReview() {
     return this.kycService.pendingReview();
+  }
+
+  kycReviewDetails(verificationId: string) {
+    return this.kycService.reviewDetails(verificationId);
   }
 
   approveKyc(verificationId: string, adminUserId: string) {

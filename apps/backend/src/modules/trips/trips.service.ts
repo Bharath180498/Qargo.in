@@ -8,6 +8,7 @@ import { DispatchService } from '../dispatch/dispatch.service';
 import { CompleteTripDto } from './dto/complete-trip.dto';
 import { RateTripDto } from './dto/rate-trip.dto';
 import { GenerateDeliveryProofUploadUrlDto } from './dto/generate-delivery-proof-upload-url.dto';
+import { buildS3UploadUrl } from '../../common/utils/s3-upload.util';
 
 @Injectable()
 export class TripsService {
@@ -187,11 +188,26 @@ export class TripsService {
 
     const safeFileName = this.buildSafeFileName(payload.fileName);
     const fileKey = `delivery-proofs/${tripId}/photo-${Date.now()}-${safeFileName}`;
-    const endpoint = this.configService.get<string>('s3.endpoint') ?? '';
-    const bucket = this.configService.get<string>('s3.bucket') ?? '';
+    const endpoint = (this.configService.get<string>('s3.endpoint') ?? '').trim();
+    const accessKeyId = (this.configService.get<string>('s3.accessKeyId') ?? '').trim();
+    const secretAccessKey = (this.configService.get<string>('s3.secretAccessKey') ?? '').trim();
+    const bucket = (this.configService.get<string>('s3.bucket') ?? '').trim();
     const region = this.configService.get<string>('s3.region') ?? 'auto';
+    const signedUpload = await buildS3UploadUrl(
+      {
+        endpoint,
+        region,
+        bucket,
+        accessKeyId,
+        secretAccessKey
+      },
+      {
+        fileKey,
+        contentType: normalizedContentType
+      }
+    );
 
-    if (!endpoint || !bucket) {
+    if (!signedUpload) {
       return {
         fileKey,
         uploadUrl: `mock://upload/${fileKey}`,
@@ -201,13 +217,12 @@ export class TripsService {
       };
     }
 
-    const base = endpoint.replace(/\/$/, '');
     return {
       fileKey,
-      uploadUrl: `${base}/${bucket}/${fileKey}?signed=mock-signature`,
-      fileUrl: `${base}/${bucket}/${fileKey}`,
+      uploadUrl: signedUpload.uploadUrl,
+      fileUrl: signedUpload.fileUrl,
       contentType: normalizedContentType,
-      mode: `s3-${region}`
+      mode: signedUpload.mode
     };
   }
 
@@ -391,7 +406,7 @@ export class TripsService {
     );
 
     const completed = await this.prisma.$transaction(async (tx) => {
-      await tx.tripDeliveryProof.upsert({
+      const deliveryProof = await tx.tripDeliveryProof.upsert({
         where: { tripId: trip.id },
         update: {
           driverId,
@@ -440,7 +455,10 @@ export class TripsService {
         }
       });
 
-      return updatedTrip;
+      return {
+        trip: updatedTrip,
+        deliveryProof
+      };
     });
 
     const activation = await this.dispatchService.activateQueuedJob(driverId);
@@ -457,7 +475,11 @@ export class TripsService {
 
     await this.notificationsService.notifyCustomer(trip.order.customerId, 'delivery_completed', {
       orderId: trip.orderId,
-      tripId
+      tripId,
+      receiverName,
+      deliveryPhotoUrl,
+      signatureCapturedAt: signatureCapturedAt?.toISOString() ?? null,
+      deliveryProofCaptured: true
     });
 
     await this.notificationsService.notifyDriver(driverId, 'trip_completed', {
@@ -470,11 +492,15 @@ export class TripsService {
       tripId,
       driverId,
       nextJobActivated: activation.activated,
-      deliveryProofCaptured: true
+      deliveryProofCaptured: true,
+      receiverName,
+      deliveryPhotoUrl,
+      signatureCapturedAt: signatureCapturedAt?.toISOString() ?? null
     });
 
     return {
-      ...completed,
+      ...completed.trip,
+      deliveryProof: completed.deliveryProof,
       nextJob: activation
     };
   }

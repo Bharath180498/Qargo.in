@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View
 } from 'react-native';
 import type { InsurancePlan, VehicleType } from '@porter/shared';
@@ -30,8 +31,6 @@ interface VirtualTruckMarker {
   longitude: number;
   distanceKm: number;
 }
-
-type SchedulePreset = 'NOW' | 'PLUS_30' | 'PLUS_60' | 'TOMORROW_9';
 
 const MOBILE_GOOGLE_MAPS_API_KEY =
   typeof (
@@ -73,12 +72,8 @@ const FALLBACK_CENTER = {
 
 const MAX_CONCURRENT_RIDES = 3;
 const ONGOING_ORDER_STATUSES = new Set(['CREATED', 'MATCHING', 'ASSIGNED', 'AT_PICKUP', 'LOADING', 'IN_TRANSIT']);
-const SCHEDULE_PRESETS: Array<{ id: SchedulePreset; label: string }> = [
-  { id: 'NOW', label: 'Now' },
-  { id: 'PLUS_30', label: '+30 min' },
-  { id: 'PLUS_60', label: '+1 hour' },
-  { id: 'TOMORROW_9', label: 'Tomorrow 9 AM' }
-];
+const CUSTOM_SCHEDULE_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const CUSTOM_SCHEDULE_TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 function getVehicleSymbol(vehicleType: VehicleType) {
   if (vehicleType === 'THREE_WHEELER') {
@@ -106,6 +101,18 @@ function formatPromoTag(input: { cheapest: boolean; fastest: boolean; rating?: n
   }
 
   return { label: 'Standard fare', tone: 'DEFAULT' as const };
+}
+
+function estimateCompareAt(total: number, compareAtTotal?: number) {
+  if (typeof compareAtTotal === 'number' && Number.isFinite(compareAtTotal) && compareAtTotal > total) {
+    return compareAtTotal;
+  }
+
+  if (total > 0) {
+    return total / 0.92;
+  }
+
+  return total;
 }
 
 function extractErrorMessage(error: unknown, fallback: string) {
@@ -144,25 +151,67 @@ function buildVirtualTruckMarkers(anchor: { lat: number; lng: number }, count = 
   }));
 }
 
-function getScheduledAtIso(preset: SchedulePreset) {
-  if (preset === 'NOW') {
-    return undefined;
-  }
-
+function defaultScheduleDateInput() {
   const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
 
-  if (preset === 'PLUS_30') {
-    return new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+function defaultScheduleTimeInput() {
+  const now = new Date(Date.now() + 60 * 60 * 1000);
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+function parseCustomSchedule(dateInput: string, timeInput: string) {
+  const normalizedDate = dateInput.trim();
+  const normalizedTime = timeInput.trim();
+
+  if (!CUSTOM_SCHEDULE_DATE_REGEX.test(normalizedDate)) {
+    return {
+      iso: undefined,
+      error: 'Use date format YYYY-MM-DD'
+    };
   }
 
-  if (preset === 'PLUS_60') {
-    return new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+  if (!CUSTOM_SCHEDULE_TIME_REGEX.test(normalizedTime)) {
+    return {
+      iso: undefined,
+      error: 'Use time format HH:MM (24-hour)'
+    };
   }
 
-  const tomorrow = new Date(now);
-  tomorrow.setDate(now.getDate() + 1);
-  tomorrow.setHours(9, 0, 0, 0);
-  return tomorrow.toISOString();
+  const [yearStr, monthStr, dayStr] = normalizedDate.split('-');
+  const [hourStr, minuteStr] = normalizedTime.split(':');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+
+  const scheduledLocal = new Date(year, month - 1, day, hour, minute, 0, 0);
+  if (
+    Number.isNaN(scheduledLocal.getTime()) ||
+    scheduledLocal.getFullYear() !== year ||
+    scheduledLocal.getMonth() !== month - 1 ||
+    scheduledLocal.getDate() !== day
+  ) {
+    return {
+      iso: undefined,
+      error: 'Enter a valid pickup date'
+    };
+  }
+
+  const minStart = Date.now() + 5 * 60 * 1000;
+  if (scheduledLocal.getTime() <= minStart) {
+    return {
+      iso: undefined,
+      error: 'Pickup must be at least 5 minutes from now'
+    };
+  }
+
+  return {
+    iso: scheduledLocal.toISOString(),
+    error: undefined
+  };
 }
 
 function formatScheduleLabel(iso?: string) {
@@ -334,7 +383,9 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
     clearError
   } = useCustomerStore();
   const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinate[]>([]);
-  const [schedulePreset, setSchedulePreset] = useState<SchedulePreset>('NOW');
+  const [customScheduleEnabled, setCustomScheduleEnabled] = useState(false);
+  const [customScheduleDate, setCustomScheduleDate] = useState(defaultScheduleDateInput);
+  const [customScheduleTime, setCustomScheduleTime] = useState(defaultScheduleTimeInput);
 
   const hasRoute = Boolean(draftPickup && draftDrop);
   const selectedMeta = selectedVehicle ? VEHICLE_UI_META[selectedVehicle.vehicleType] : null;
@@ -355,7 +406,14 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
 
     return Math.min(...quotes.map((item) => item.etaMinutes));
   }, [quotes]);
-  const scheduledAt = useMemo(() => getScheduledAtIso(schedulePreset), [schedulePreset]);
+  const customScheduleResult = useMemo(
+    () =>
+      customScheduleEnabled
+        ? parseCustomSchedule(customScheduleDate, customScheduleTime)
+        : { iso: undefined, error: undefined },
+    [customScheduleDate, customScheduleEnabled, customScheduleTime]
+  );
+  const scheduledAt = customScheduleResult.iso;
   const scheduleLabel = useMemo(() => formatScheduleLabel(scheduledAt), [scheduledAt]);
 
   const region = useMemo(
@@ -494,7 +552,7 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
     if (ongoingCount >= MAX_CONCURRENT_RIDES) {
       Alert.alert(
         'Ride limit reached',
-        'You can run up to 3 active rides at once. Complete or cancel one ride to create another.',
+        'You already have the maximum active rides. Complete or cancel one ride first.',
         [
           { text: 'Not now', style: 'cancel' },
           { text: 'Open Ride History', onPress: () => navigation.navigate('CustomerRides') }
@@ -511,6 +569,11 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
     if (!draftPickup || !draftDrop) {
       Alert.alert('Route required', 'Please choose pick-up and drop points first.');
       navigation.navigate('CustomerPickupConfirm');
+      return;
+    }
+
+    if (customScheduleEnabled && customScheduleResult.error) {
+      Alert.alert('Invalid pickup time', customScheduleResult.error);
       return;
     }
 
@@ -538,9 +601,14 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
       if (message.toLowerCase().includes('maximum 3 active bookings')) {
         Alert.alert(
           'Ride limit reached',
-          'You can run up to 3 active rides at once. Complete one ride first.',
+          'You already have the maximum active rides. Complete one ride first.',
           [{ text: 'Open Ride History', onPress: () => navigation.navigate('CustomerRides') }]
         );
+        return;
+      }
+
+      if (message.toLowerCase().includes('city-to-city') || message.toLowerCase().includes('coming soon')) {
+        Alert.alert('City-to-city coming soon', message);
         return;
       }
 
@@ -566,8 +634,13 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
         insuranceSelected,
         minDriverRating
       });
-    } catch {
-      Alert.alert('Quote refresh failed', 'Backend may not be reachable from this phone.');
+    } catch (error) {
+      const message = extractErrorMessage(error, 'Backend may not be reachable from this phone.');
+      if (message.toLowerCase().includes('city-to-city') || message.toLowerCase().includes('coming soon')) {
+        Alert.alert('City-to-city coming soon', message);
+      } else {
+        Alert.alert('Quote refresh failed', message);
+      }
     }
   };
 
@@ -656,22 +729,60 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
           <View style={styles.scheduleSection}>
             <View style={styles.scheduleHeader}>
               <Text style={styles.scheduleTitle}>Pickup time</Text>
-              <Text style={styles.scheduleHint}>{scheduleLabel}</Text>
+              <Text style={[styles.scheduleHint, customScheduleResult.error ? styles.scheduleHintError : undefined]}>
+                {customScheduleEnabled && customScheduleResult.error
+                  ? customScheduleResult.error
+                  : scheduleLabel}
+              </Text>
             </View>
             <View style={styles.scheduleOptions}>
-              {SCHEDULE_PRESETS.map((preset) => {
-                const active = schedulePreset === preset.id;
-                return (
-                  <Pressable
-                    key={preset.id}
-                    style={[styles.scheduleChip, active && styles.scheduleChipActive]}
-                    onPress={() => setSchedulePreset(preset.id)}
-                  >
-                    <Text style={[styles.scheduleChipText, active && styles.scheduleChipTextActive]}>{preset.label}</Text>
-                  </Pressable>
-                );
-              })}
+              <Pressable
+                style={[styles.scheduleChip, !customScheduleEnabled && styles.scheduleChipActive]}
+                onPress={() => setCustomScheduleEnabled(false)}
+              >
+                <Text style={[styles.scheduleChipText, !customScheduleEnabled && styles.scheduleChipTextActive]}>
+                  Now
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[styles.scheduleChip, customScheduleEnabled && styles.scheduleChipActive]}
+                onPress={() => setCustomScheduleEnabled(true)}
+              >
+                <Text style={[styles.scheduleChipText, customScheduleEnabled && styles.scheduleChipTextActive]}>
+                  Custom
+                </Text>
+              </Pressable>
             </View>
+            {customScheduleEnabled ? (
+              <View style={styles.customScheduleInputs}>
+                <View style={styles.customScheduleField}>
+                  <Text style={styles.customScheduleLabel}>Date</Text>
+                  <TextInput
+                    value={customScheduleDate}
+                    onChangeText={setCustomScheduleDate}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor="#94A3B8"
+                    style={styles.customScheduleInput}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    maxLength={10}
+                  />
+                </View>
+                <View style={styles.customScheduleField}>
+                  <Text style={styles.customScheduleLabel}>Time</Text>
+                  <TextInput
+                    value={customScheduleTime}
+                    onChangeText={setCustomScheduleTime}
+                    placeholder="HH:MM"
+                    placeholderTextColor="#94A3B8"
+                    style={styles.customScheduleInput}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    maxLength={5}
+                  />
+                </View>
+              </View>
+            ) : null}
           </View>
 
           <ScrollView
@@ -687,14 +798,10 @@ export function CustomerTripSelectScreen({ navigation }: Props) {
               const meta = VEHICLE_UI_META[quote.vehicleType as VehicleType];
               const active = selectedVehicle?.vehicleType === quote.vehicleType;
               const displayedNearbyDrivers = quote.availableDrivers + virtualTruckMarkers.length;
-              const compareAtPrice =
-                typeof quote.pricing.compareAtTotal === 'number' &&
-                Number.isFinite(quote.pricing.compareAtTotal) &&
-                quote.pricing.compareAtTotal > quote.pricing.total
-                  ? quote.pricing.compareAtTotal
-                  : quote.pricing.total > 0
-                    ? quote.pricing.total / 0.92
-                    : quote.pricing.total;
+              const compareAtPrice = estimateCompareAt(
+                quote.pricing.total,
+                typeof quote.pricing.compareAtTotal === 'number' ? quote.pricing.compareAtTotal : undefined
+              );
               const savingsAmount = Math.max(0, compareAtPrice - quote.pricing.total);
               const savingsPercent =
                 compareAtPrice > 0 ? Math.round((savingsAmount / compareAtPrice) * 100) : 0;
@@ -819,7 +926,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8F1'
   },
   mapBlock: {
-    height: '40%',
+    height: '32%',
     position: 'relative'
   },
   map: {
@@ -988,6 +1095,9 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_500Medium',
     fontSize: 11
   },
+  scheduleHintError: {
+    color: '#B91C1C'
+  },
   scheduleOptions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1012,6 +1122,31 @@ const styles = StyleSheet.create({
   },
   scheduleChipTextActive: {
     color: '#0F766E'
+  },
+  customScheduleInputs: {
+    marginTop: 10,
+    flexDirection: 'row',
+    gap: 8
+  },
+  customScheduleField: {
+    flex: 1,
+    gap: 4
+  },
+  customScheduleLabel: {
+    color: '#475569',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 11
+  },
+  customScheduleInput: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+    color: '#0F172A',
+    fontFamily: 'Manrope_600SemiBold',
+    fontSize: 13,
+    paddingHorizontal: 10,
+    paddingVertical: 8
   },
   list: {
     flex: 1

@@ -117,6 +117,22 @@ class EnvSchema {
   SUPPORT_PHONE?: string;
 
   @IsOptional()
+  @IsString()
+  SUPPORT_TRANSLATION_ENABLED?: string;
+
+  @IsOptional()
+  @IsString()
+  SUPPORT_TRANSLATION_TARGET_LANGUAGE?: string;
+
+  @IsOptional()
+  @IsString()
+  GOOGLE_TRANSLATE_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  GOOGLE_TRANSLATE_API_URL?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(60)
   OTP_TTL_SECONDS?: number;

@@ -28,7 +28,7 @@ export class DispatchController {
 
   @Post('offers/:offerId/accept')
   acceptOffer(@Param('offerId') offerId: string, @Body() payload: DispatchOfferActionDto) {
-    return this.dispatchService.acceptOffer(offerId, payload.driverId);
+    return this.dispatchService.acceptOffer(offerId, payload.driverId, payload.driverPaymentMethodId);
   }
 
   @Post('offers/:offerId/reject')

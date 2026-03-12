@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   AvailabilityStatus,
   DispatchDecision,
@@ -367,7 +367,7 @@ export class DispatchService {
     return offer;
   }
 
-  async acceptOffer(offerId: string, driverId: string) {
+  async acceptOffer(offerId: string, driverId: string, driverPaymentMethodId?: string) {
     const existingOffer = await this.expireOfferIfNeeded(offerId);
     if (existingOffer.status !== TripOfferStatus.PENDING) {
       throw new NotFoundException('Offer is no longer active');
@@ -400,6 +400,11 @@ export class DispatchService {
         tripId: activeTrip.id
       };
     }
+
+    const selectedPaymentMethod = await this.resolveDriverPreferredPaymentMethod(
+      driverId,
+      driverPaymentMethodId
+    );
 
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.tripOffer.updateMany({
@@ -444,7 +449,15 @@ export class DispatchService {
           orderId: order.id,
           driverId,
           etaMinutes: acceptedOffer.routeEtaMinutes,
-          status: TripStatus.ASSIGNED
+          status: TripStatus.ASSIGNED,
+          driverPreferredPaymentMethodId: selectedPaymentMethod.method?.id ?? null,
+          driverPreferredUpiId:
+            selectedPaymentMethod.method?.upiId ?? selectedPaymentMethod.payoutUpiId ?? null,
+          driverPreferredPaymentLabel: selectedPaymentMethod.method?.label ?? null,
+          driverPreferredUpiQrImageUrl:
+            selectedPaymentMethod.method?.qrImageUrl ??
+            selectedPaymentMethod.payoutUpiQrImageUrl ??
+            null
         }
       });
 
@@ -505,7 +518,80 @@ export class DispatchService {
     return {
       accepted: true,
       tripId: result.trip.id,
-      orderId: order.id
+      orderId: order.id,
+      preferredPaymentMethodId: result.trip.driverPreferredPaymentMethodId,
+      preferredUpiId: result.trip.driverPreferredUpiId
+    };
+  }
+
+  private async resolveDriverPreferredPaymentMethod(
+    driverId: string,
+    requestedMethodId?: string
+  ): Promise<{
+    method?: {
+      id: string;
+      label?: string | null;
+      upiId: string;
+      qrImageUrl?: string | null;
+    };
+    payoutUpiId?: string | null;
+    payoutUpiQrImageUrl?: string | null;
+  }> {
+    const driverProfile = await this.prisma.driverProfile.findUnique({
+      where: { id: driverId },
+      select: {
+        id: true,
+        userId: true,
+        payoutAccount: {
+          select: {
+            upiId: true,
+            upiQrImageUrl: true
+          }
+        }
+      }
+    });
+
+    if (!driverProfile) {
+      throw new NotFoundException('Driver profile not found');
+    }
+
+    const methods = await this.prisma.driverPaymentMethod.findMany({
+      where: {
+        userId: driverProfile.userId,
+        isActive: true
+      },
+      orderBy: [{ isPreferred: 'desc' }, { updatedAt: 'desc' }],
+      select: {
+        id: true,
+        label: true,
+        upiId: true,
+        qrImageUrl: true
+      }
+    });
+
+    if (methods.length === 0) {
+      if (requestedMethodId) {
+        throw new BadRequestException('Selected payment method is not available for this driver');
+      }
+
+      return {
+        payoutUpiId: driverProfile.payoutAccount?.upiId,
+        payoutUpiQrImageUrl: driverProfile.payoutAccount?.upiQrImageUrl
+      };
+    }
+
+    const selected = requestedMethodId
+      ? methods.find((method) => method.id === requestedMethodId)
+      : methods[0];
+
+    if (!selected) {
+      throw new BadRequestException('Selected payment method is not available for this driver');
+    }
+
+    return {
+      method: selected,
+      payoutUpiId: driverProfile.payoutAccount?.upiId,
+      payoutUpiQrImageUrl: driverProfile.payoutAccount?.upiQrImageUrl
     };
   }
 

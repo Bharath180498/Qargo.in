@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Linking,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -13,7 +12,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import api, { SUPPORT_PHONE } from '../../services/api';
+import api from '../../services/api';
 import { isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
 import { useSessionStore } from '../../store/useSessionStore';
 import type { RootStackParamList } from '../../types/navigation';
@@ -205,17 +204,14 @@ export function CustomerProfileScreen({ navigation }: Props) {
   };
 
   const callSupport = async () => {
-    const telUrl = `tel:${SUPPORT_PHONE}`;
-    try {
-      const canOpen = await Linking.canOpenURL(telUrl);
-      if (!canOpen) {
-        Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
-        return;
-      }
-      await Linking.openURL(telUrl);
-    } catch {
-      Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
-    }
+    Alert.alert(
+      'Message support first',
+      'Please message us first in Support Center. We aim to resolve within 6 hours. If unresolved in 24 hours, call support to escalate.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open Support Center', onPress: () => navigation.navigate('CustomerSupport') }
+      ]
+    );
   };
 
   return (
@@ -390,11 +386,11 @@ export function CustomerProfileScreen({ navigation }: Props) {
           <View style={styles.supportCard}>
             <Text style={styles.actionsTitle}>Need Help?</Text>
             <Text style={styles.supportSubtitle}>
-              Priority customer care is available for urgent shipment issues.
+              Message support first. We aim to resolve in 6 hours. If unresolved in 24 hours, escalate by call.
             </Text>
 
             <Pressable style={styles.supportButton} onPress={() => void callSupport()}>
-              <Text style={styles.supportButtonText}>Call {SUPPORT_PHONE}</Text>
+              <Text style={styles.supportButtonText}>Call after 24h unresolved</Text>
             </Pressable>
 
             <Pressable

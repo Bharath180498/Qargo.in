@@ -21,6 +21,9 @@ import type { RootStackParamList } from '../../types/navigation';
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerSupport'>;
 
 type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'WAITING_FOR_USER' | 'RESOLVED';
+const RESOLUTION_TARGET_HOURS = 6;
+const CALL_ESCALATION_HOURS = 24;
+const CALL_ESCALATION_MS = CALL_ESCALATION_HOURS * 60 * 60 * 1000;
 
 interface SupportTicket {
   id: string;
@@ -75,6 +78,21 @@ export function CustomerSupportScreen({ navigation }: Props) {
     () => tickets.find((ticket) => ticket.id === selectedTicketId),
     [selectedTicketId, tickets]
   );
+  const escalationEligible = useMemo(() => {
+    const now = Date.now();
+    return tickets.some((ticket) => {
+      if (ticket.status === 'RESOLVED') {
+        return false;
+      }
+
+      const updatedAtMs = new Date(ticket.updatedAt).getTime();
+      if (!Number.isFinite(updatedAtMs)) {
+        return false;
+      }
+
+      return now - updatedAtMs >= CALL_ESCALATION_MS;
+    });
+  }, [tickets]);
 
   const loadActiveTrip = useCallback(async () => {
     if (!activeOrderId) {
@@ -142,7 +160,7 @@ export function CustomerSupportScreen({ navigation }: Props) {
     return () => clearInterval(timer);
   }, [loadTickets]);
 
-  const callSupport = async () => {
+  const placeSupportCall = async () => {
     const url = `tel:${SUPPORT_PHONE}`;
     try {
       const canOpen = await Linking.canOpenURL(url);
@@ -154,6 +172,38 @@ export function CustomerSupportScreen({ navigation }: Props) {
     } catch {
       Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
     }
+  };
+
+  const callSupport = async () => {
+    if (tickets.length === 0) {
+      Alert.alert(
+        'Message support first',
+        `Please create a ticket first. We aim to resolve within ${RESOLUTION_TARGET_HOURS} hours. If you do not hear back within ${CALL_ESCALATION_HOURS} hours, call support.`
+      );
+      return;
+    }
+
+    if (!escalationEligible) {
+      Alert.alert(
+        'Please wait for first response',
+        `Support is working on your ticket. We aim to resolve within ${RESOLUTION_TARGET_HOURS} hours. If there is no resolution in ${CALL_ESCALATION_HOURS} hours, call support to escalate.`
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Escalate via call?',
+      `This issue has crossed ${CALL_ESCALATION_HOURS} hours without resolution. You can call support now.`,
+      [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: `Call ${SUPPORT_PHONE}`,
+          onPress: () => {
+            void placeSupportCall();
+          }
+        }
+      ]
+    );
   };
 
   const createTicket = async () => {
@@ -220,10 +270,18 @@ export function CustomerSupportScreen({ navigation }: Props) {
           }
         >
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Need urgent help?</Text>
-            <Text style={styles.info}>Call support directly for immediate shipment escalation.</Text>
+            <Text style={styles.cardTitle}>Message first, then escalate if needed</Text>
+            <Text style={styles.info}>We aim to resolve support tickets within {RESOLUTION_TARGET_HOURS} hours.</Text>
+            <Text style={styles.info}>
+              If there is no resolution within {CALL_ESCALATION_HOURS} hours, call support to escalate.
+            </Text>
+            <Text style={[styles.meta, escalationEligible ? styles.metaReady : undefined]}>
+              {escalationEligible
+                ? `Call escalation is available now.`
+                : `Call unlocks after ${CALL_ESCALATION_HOURS}h unresolved.`}
+            </Text>
             <Pressable style={styles.callButton} onPress={() => void callSupport()}>
-              <Text style={styles.callButtonText}>Call {SUPPORT_PHONE}</Text>
+              <Text style={styles.callButtonText}>Escalate by call</Text>
             </Pressable>
           </View>
 
@@ -246,6 +304,7 @@ export function CustomerSupportScreen({ navigation }: Props) {
               multiline
               maxLength={2000}
             />
+            <Text style={styles.meta}>Type in any language. Our support team will review your message directly.</Text>
             <Text style={styles.meta}>
               Context: Order {activeOrderId ?? '--'} • Trip {activeTripId ?? '--'}
             </Text>
@@ -311,6 +370,7 @@ export function CustomerSupportScreen({ navigation }: Props) {
                 multiline
                 maxLength={2000}
               />
+              <Text style={styles.meta}>Type in any language. Our support team will review your message directly.</Text>
               <Pressable
                 style={[styles.primaryButton, busy && styles.disabledButton]}
                 onPress={() => void sendReply()}
@@ -390,6 +450,9 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_500Medium',
     color: '#64748B',
     fontSize: 12
+  },
+  metaReady: {
+    color: '#0F766E'
   },
   callButton: {
     marginTop: 4,

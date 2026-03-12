@@ -27,6 +27,13 @@ export default () => ({
   baseFarePerKm: Number(process.env.BASE_FARE_PER_KM ?? 14),
   alwaysOnDiscountPercent: Number(process.env.ALWAYS_ON_DISCOUNT_PERCENT ?? 8),
   supportPhone: process.env.SUPPORT_PHONE ?? '9844259899',
+  supportTranslation: {
+    enabled: process.env.SUPPORT_TRANSLATION_ENABLED === 'true',
+    targetLanguage: process.env.SUPPORT_TRANSLATION_TARGET_LANGUAGE ?? 'en',
+    googleApiKey: process.env.GOOGLE_TRANSLATE_API_KEY ?? '',
+    googleApiUrl:
+      process.env.GOOGLE_TRANSLATE_API_URL ?? 'https://translation.googleapis.com/language/translate/v2'
+  },
   googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY ?? '',
   idfyApiKey: process.env.IDFY_API_KEY ?? '',
   idfyApiUrl: process.env.IDFY_API_URL ?? '',

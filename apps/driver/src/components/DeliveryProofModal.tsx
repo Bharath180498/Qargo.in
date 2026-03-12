@@ -38,6 +38,7 @@ interface DeliveryProofModalProps {
 
 const SIGNATURE_HEIGHT = 170;
 const SIGNATURE_MIN_POINTS = 6;
+const SIGNATURE_STROKE_WIDTH = 3;
 
 function buildFileNameFromUri(uri: string, fallback = 'delivery-proof.jpg') {
   const clean = uri.split('?')[0] ?? '';
@@ -125,8 +126,8 @@ export function DeliveryProofModal({ visible, submitting, onClose, onSubmit }: D
 
         segments.push({
           key: `${strokeIndex}-${index}`,
-          left: from.x,
-          top: from.y,
+          left: (from.x + to.x) / 2 - length / 2,
+          top: (from.y + to.y) / 2 - SIGNATURE_STROKE_WIDTH / 2,
           length,
           angleRad: Math.atan2(to.y - from.y, to.x - from.x)
         });
@@ -140,7 +141,9 @@ export function DeliveryProofModal({ visible, submitting, onClose, onSubmit }: D
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => !submitting,
+        onStartShouldSetPanResponderCapture: () => !submitting,
         onMoveShouldSetPanResponder: () => !submitting,
+        onMoveShouldSetPanResponderCapture: () => !submitting,
         onPanResponderGrant: (event) => {
           const nextPoint = normalizePoint(
             {
@@ -334,6 +337,7 @@ export function DeliveryProofModal({ visible, submitting, onClose, onSubmit }: D
                 {signatureSegments.map((segment) => (
                   <View
                     key={segment.key}
+                    pointerEvents="none"
                     style={[
                       styles.signatureSegment,
                       {
@@ -468,10 +472,9 @@ const styles = StyleSheet.create({
   },
   signatureSegment: {
     position: 'absolute',
-    height: 3,
+    height: SIGNATURE_STROKE_WIDTH,
     borderRadius: 999,
-    backgroundColor: '#1E293B',
-    transformOrigin: 'left center'
+    backgroundColor: '#1E293B'
   },
   helperText: {
     fontFamily: typography.body,

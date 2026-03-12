@@ -1,7 +1,6 @@
-import { Alert, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { RootStackParamList } from '../types/navigation';
 import { useSessionStore } from '../store/useSessionStore';
-import { SUPPORT_PHONE } from '../services/api';
 
 type DrawerRoute =
   | 'CustomerHome'
@@ -52,20 +51,6 @@ export function CustomerSideDrawer({
     onNavigateTracking?.();
   };
 
-  const callSupport = async () => {
-    const telUrl = `tel:${SUPPORT_PHONE}`;
-    try {
-      const canOpen = await Linking.canOpenURL(telUrl);
-      if (!canOpen) {
-        Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
-        return;
-      }
-      await Linking.openURL(telUrl);
-    } catch {
-      Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
-    }
-  };
-
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
@@ -95,14 +80,6 @@ export function CustomerSideDrawer({
                 <Text style={styles.itemText}>Active Trip</Text>
               </Pressable>
             ) : null}
-
-            <Pressable style={styles.itemButton} onPress={callSupport}>
-              <Text style={styles.itemText}>Call Support · {SUPPORT_PHONE}</Text>
-            </Pressable>
-
-            <Pressable style={[styles.itemButton, styles.itemButtonActive]} onPress={() => navigate('CustomerSupport')}>
-              <Text style={[styles.itemText, styles.itemTextActive]}>Open Support Center</Text>
-            </Pressable>
           </View>
 
           <Pressable style={styles.closeButton} onPress={onClose}>

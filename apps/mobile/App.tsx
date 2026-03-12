@@ -19,6 +19,7 @@ import { CustomerTrackingScreen } from './src/screens/customer/CustomerTrackingS
 import { CustomerPaymentScreen } from './src/screens/customer/CustomerPaymentScreen';
 import { CustomerSupportScreen } from './src/screens/customer/CustomerSupportScreen';
 import { useSessionStore } from './src/store/useSessionStore';
+import { ensureCustomerPushRegistered } from './src/services/pushNotifications';
 import { colors } from './src/theme';
 import type { RootStackParamList } from './src/types/navigation';
 
@@ -42,6 +43,7 @@ function LoadingScreen() {
 export default function App() {
   const loadingSession = useSessionStore((state) => state.loading);
   const token = useSessionStore((state) => state.token);
+  const user = useSessionStore((state) => state.user);
   const bootstrapCustomerSession = useSessionStore((state) => state.bootstrapCustomerSession);
 
   const [soraLoaded] = useSoraFonts({ Sora_700Bold });
@@ -50,6 +52,14 @@ export default function App() {
   useEffect(() => {
     void bootstrapCustomerSession();
   }, [bootstrapCustomerSession]);
+
+  useEffect(() => {
+    if (!token || !user?.id) {
+      return;
+    }
+
+    void ensureCustomerPushRegistered(user.id);
+  }, [token, user?.id]);
 
   if (!soraLoaded || !manropeLoaded) {
     return <LoadingScreen />;

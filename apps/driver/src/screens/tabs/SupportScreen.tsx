@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Linking,
   Pressable,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -11,33 +13,103 @@ import {
   TextInput,
   View
 } from 'react-native';
-import api, { SUPPORT_PHONE } from '../../services/api';
+import api, { SUPPORT_PHONE, maskPhone } from '../../services/api';
 import { useDriverSessionStore } from '../../store/useDriverSessionStore';
 import { useDriverAppStore } from '../../store/useDriverAppStore';
 import { colors, radius, spacing, typography } from '../../theme';
 
 type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'WAITING_FOR_USER' | 'RESOLVED';
+type SenderType = 'USER' | 'ADMIN' | 'SYSTEM';
+const RESOLUTION_TARGET_HOURS = 6;
+const CALL_ESCALATION_HOURS = 24;
+const CALL_ESCALATION_MS = CALL_ESCALATION_HOURS * 60 * 60 * 1000;
 
-interface SupportTicket {
+interface PickedImage {
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  fileSize?: number | null;
+}
+
+interface DraftAttachment {
+  localId: string;
+  uri: string;
+  fileName?: string;
+  contentType?: string;
+  fileSizeBytes?: number;
+}
+
+interface SupportMessageAttachment {
+  id: string;
+  fileKey: string;
+  fileUrl: string;
+  fileName?: string | null;
+  contentType?: string | null;
+  fileSizeBytes?: number | null;
+  createdAt?: string;
+}
+
+interface SupportMessage {
+  id: string;
+  senderType: SenderType;
+  message: string;
+  createdAt: string;
+  senderUser?: {
+    id: string;
+    name: string;
+    role: 'CUSTOMER' | 'DRIVER' | 'ADMIN';
+  } | null;
+  attachments: SupportMessageAttachment[];
+}
+
+interface SupportTicketSummary {
   id: string;
   subject: string;
-  description: string;
   status: TicketStatus;
   createdAt: string;
   updatedAt: string;
   orderId?: string | null;
   tripId?: string | null;
-  messages: Array<{
-    id: string;
-    senderType: 'USER' | 'ADMIN' | 'SYSTEM';
-    message: string;
-    createdAt: string;
-    senderUser?: {
-      id: string;
-      name: string;
-      role: 'CUSTOMER' | 'DRIVER' | 'ADMIN';
-    } | null;
-  }>;
+  messageCount: number;
+}
+
+interface SupportTicketDetail extends SupportTicketSummary {
+  description: string;
+  messages: SupportMessage[];
+}
+
+const MAX_ATTACHMENTS_PER_MESSAGE = 5;
+
+async function pickSupportImageFromLibrary(): Promise<PickedImage | null> {
+  try {
+    const ImagePicker = require('expo-image-picker') as {
+      MediaTypeOptions?: { Images?: unknown };
+      requestMediaLibraryPermissionsAsync: () => Promise<{ granted: boolean }>;
+      launchImageLibraryAsync: (options: Record<string, unknown>) => Promise<{
+        canceled: boolean;
+        assets?: PickedImage[];
+      }>;
+    };
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      throw new Error('Allow photo access to upload support images.');
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions?.Images,
+      allowsEditing: true,
+      quality: 0.8
+    });
+
+    if (result.canceled || !result.assets?.[0]) {
+      return null;
+    }
+
+    return result.assets[0];
+  } catch {
+    throw new Error('Image picker unavailable. Install dependency: npx expo install expo-image-picker');
+  }
 }
 
 function formatDate(value: string) {
@@ -53,76 +125,325 @@ function errorMessage(error: unknown, fallback: string) {
     : fallback;
 }
 
+function normalizeStatus(input: unknown): TicketStatus {
+  const value = typeof input === 'string' ? input : 'OPEN';
+  if (value === 'IN_PROGRESS' || value === 'WAITING_FOR_USER' || value === 'RESOLVED') {
+    return value;
+  }
+  return 'OPEN';
+}
+
+function normalizeAttachment(input: unknown): SupportMessageAttachment | null {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+
+  const row = input as Record<string, unknown>;
+  const id = typeof row.id === 'string' ? row.id : '';
+  const fileKey = typeof row.fileKey === 'string' ? row.fileKey : '';
+  const fileUrl = typeof row.fileUrl === 'string' ? row.fileUrl : '';
+  if (!id || !fileKey || !fileUrl) {
+    return null;
+  }
+
+  return {
+    id,
+    fileKey,
+    fileUrl,
+    fileName: typeof row.fileName === 'string' ? row.fileName : undefined,
+    contentType: typeof row.contentType === 'string' ? row.contentType : undefined,
+    fileSizeBytes: typeof row.fileSizeBytes === 'number' ? row.fileSizeBytes : undefined,
+    createdAt: typeof row.createdAt === 'string' ? row.createdAt : undefined
+  };
+}
+
+function normalizeMessage(input: unknown): SupportMessage | null {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+
+  const row = input as Record<string, unknown>;
+  const id = typeof row.id === 'string' ? row.id : '';
+  const message = typeof row.message === 'string' ? row.message : '';
+  const createdAt = typeof row.createdAt === 'string' ? row.createdAt : '';
+
+  if (!id || !message || !createdAt) {
+    return null;
+  }
+
+  const senderTypeRaw = typeof row.senderType === 'string' ? row.senderType : 'SYSTEM';
+  const senderType: SenderType =
+    senderTypeRaw === 'USER' || senderTypeRaw === 'ADMIN' || senderTypeRaw === 'SYSTEM'
+      ? senderTypeRaw
+      : 'SYSTEM';
+
+  const senderUser =
+    row.senderUser && typeof row.senderUser === 'object'
+      ? {
+          id: String((row.senderUser as Record<string, unknown>).id ?? ''),
+          name: String((row.senderUser as Record<string, unknown>).name ?? ''),
+          role: String((row.senderUser as Record<string, unknown>).role ?? 'DRIVER') as
+            | 'CUSTOMER'
+            | 'DRIVER'
+            | 'ADMIN'
+        }
+      : null;
+
+  const attachments = Array.isArray(row.attachments)
+    ? row.attachments
+        .map(normalizeAttachment)
+        .filter((attachment): attachment is SupportMessageAttachment => Boolean(attachment))
+    : [];
+
+  return {
+    id,
+    senderType,
+    message,
+    createdAt,
+    senderUser,
+    attachments
+  };
+}
+
+function normalizeTicketSummary(input: unknown): SupportTicketSummary | null {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+
+  const row = input as Record<string, unknown>;
+  const id = typeof row.id === 'string' ? row.id : '';
+  const subject = typeof row.subject === 'string' ? row.subject : '';
+  const createdAt = typeof row.createdAt === 'string' ? row.createdAt : '';
+  const updatedAt = typeof row.updatedAt === 'string' ? row.updatedAt : '';
+
+  if (!id || !subject || !createdAt || !updatedAt) {
+    return null;
+  }
+
+  const messages = Array.isArray(row.messages)
+    ? row.messages.map(normalizeMessage).filter((message): message is SupportMessage => Boolean(message))
+    : [];
+
+  return {
+    id,
+    subject,
+    status: normalizeStatus(row.status),
+    createdAt,
+    updatedAt,
+    orderId: typeof row.orderId === 'string' ? row.orderId : undefined,
+    tripId: typeof row.tripId === 'string' ? row.tripId : undefined,
+    messageCount: messages.length
+  };
+}
+
+function normalizeTicketDetail(input: unknown): SupportTicketDetail | null {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+
+  const row = input as Record<string, unknown>;
+  const summary = normalizeTicketSummary(row);
+  if (!summary) {
+    return null;
+  }
+
+  const description = typeof row.description === 'string' ? row.description : '';
+  const messages = Array.isArray(row.messages)
+    ? row.messages.map(normalizeMessage).filter((message): message is SupportMessage => Boolean(message))
+    : [];
+
+  return {
+    ...summary,
+    description,
+    messages
+  };
+}
+
+function getStatusLabel(status: TicketStatus) {
+  switch (status) {
+    case 'OPEN':
+      return 'Pending';
+    case 'IN_PROGRESS':
+      return 'In Progress';
+    case 'WAITING_FOR_USER':
+      return 'Waiting on You';
+    case 'RESOLVED':
+      return 'Resolved';
+    default:
+      return status;
+  }
+}
+
+function buildDraftFileName(index: number) {
+  return `support-image-${Date.now()}-${index}.jpg`;
+}
+
 export function SupportScreen() {
   const user = useDriverSessionStore((state) => state.user);
   const currentJob = useDriverAppStore((state) => state.currentJob);
 
-  const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [tickets, setTickets] = useState<SupportTicketSummary[]>([]);
   const [selectedTicketId, setSelectedTicketId] = useState<string>();
-  const [loading, setLoading] = useState(true);
+  const [selectedTicket, setSelectedTicket] = useState<SupportTicketDetail>();
+  const [loadingList, setLoadingList] = useState(true);
+  const [refreshingList, setRefreshingList] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
   const [busy, setBusy] = useState(false);
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
   const [reply, setReply] = useState('');
+  const [replyAttachments, setReplyAttachments] = useState<DraftAttachment[]>([]);
+  const [viewMode, setViewMode] = useState<'inbox' | 'detail'>('inbox');
 
-  const selectedTicket = useMemo(
-    () => tickets.find((ticket) => ticket.id === selectedTicketId),
-    [selectedTicketId, tickets]
+  const maskedSupportPhone = useMemo(() => maskPhone(SUPPORT_PHONE), []);
+  const escalationEligible = useMemo(() => {
+    const now = Date.now();
+    return tickets.some((ticket) => {
+      if (ticket.status === 'RESOLVED') {
+        return false;
+      }
+
+      const updatedAtMs = new Date(ticket.updatedAt).getTime();
+      if (!Number.isFinite(updatedAtMs)) {
+        return false;
+      }
+
+      return now - updatedAtMs >= CALL_ESCALATION_MS;
+    });
+  }, [tickets]);
+
+  const loadTickets = useCallback(
+    async (showSpinner = true) => {
+      if (!user?.id) {
+        return;
+      }
+
+      if (showSpinner) {
+        setLoadingList(true);
+      }
+
+      try {
+        const response = await api.get('/support/tickets', {
+          params: {
+            userId: user.id
+          }
+        });
+
+        const nextRaw = Array.isArray(response.data) ? response.data : [];
+        const next = nextRaw.map(normalizeTicketSummary).filter(Boolean) as SupportTicketSummary[];
+        setTickets(next);
+
+        if (selectedTicketId && !next.some((ticket) => ticket.id === selectedTicketId)) {
+          setSelectedTicketId(undefined);
+          setSelectedTicket(undefined);
+          setReplyAttachments([]);
+          setViewMode('inbox');
+        }
+      } catch (loadError: unknown) {
+        Alert.alert('Support', errorMessage(loadError, 'Could not load support tickets.'));
+      } finally {
+        setLoadingList(false);
+        setRefreshingList(false);
+      }
+    },
+    [selectedTicketId, user?.id]
   );
 
-  const loadTickets = useCallback(async () => {
-    if (!user?.id) {
-      return;
-    }
+  const openTicket = useCallback(
+    async (ticketId: string, showSpinner = true, silent = false) => {
+      if (!user?.id) {
+        return;
+      }
 
-    try {
-      const response = await api.get('/support/tickets', {
-        params: {
-          userId: user.id
+      if (showSpinner) {
+        setLoadingDetail(true);
+      }
+
+      try {
+        const response = await api.get(`/support/tickets/${ticketId}`, {
+          params: {
+            userId: user.id
+          }
+        });
+
+        const detail = normalizeTicketDetail(response.data);
+        if (!detail) {
+          throw new Error('Could not parse ticket details');
         }
-      });
 
-      const next = Array.isArray(response.data) ? (response.data as SupportTicket[]) : [];
-      setTickets(next);
-
-      if (!selectedTicketId && next.length > 0) {
-        setSelectedTicketId(next[0].id);
+        setSelectedTicketId(ticketId);
+        setSelectedTicket(detail);
+        setViewMode('detail');
+      } catch (ticketError: unknown) {
+        if (!silent) {
+          Alert.alert('Support', errorMessage(ticketError, 'Could not open this ticket.'));
+        }
+      } finally {
+        setLoadingDetail(false);
       }
-
-      if (selectedTicketId && !next.some((ticket) => ticket.id === selectedTicketId)) {
-        setSelectedTicketId(next[0]?.id);
-      }
-    } catch (loadError: unknown) {
-      Alert.alert('Support', errorMessage(loadError, 'Could not load support tickets.'));
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedTicketId, user?.id]);
+    },
+    [user?.id]
+  );
 
   useEffect(() => {
-    void loadTickets();
+    void loadTickets(true);
   }, [loadTickets]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      void loadTickets();
+      void loadTickets(false);
+      if (selectedTicketId && viewMode === 'detail') {
+        void openTicket(selectedTicketId, false, true);
+      }
     }, 15000);
 
     return () => clearInterval(timer);
-  }, [loadTickets]);
+  }, [loadTickets, openTicket, selectedTicketId, viewMode]);
 
-  const callSupport = async () => {
+  const placeSupportCall = async () => {
     const url = `tel:${SUPPORT_PHONE}`;
     try {
       const canOpen = await Linking.canOpenURL(url);
       if (!canOpen) {
-        Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
+        Alert.alert('Support', 'Unable to launch phone dialer.');
         return;
       }
       await Linking.openURL(url);
     } catch {
-      Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
+      Alert.alert('Support', 'Unable to place call right now.');
     }
+  };
+
+  const callSupport = async () => {
+    if (tickets.length === 0) {
+      Alert.alert(
+        'Message support first',
+        `Please create a ticket first. We aim to resolve within ${RESOLUTION_TARGET_HOURS} hours. If unresolved in ${CALL_ESCALATION_HOURS} hours, call support.`
+      );
+      return;
+    }
+
+    if (!escalationEligible) {
+      Alert.alert(
+        'Please wait for first response',
+        `Support is working on your ticket. We aim to resolve within ${RESOLUTION_TARGET_HOURS} hours. If no resolution within ${CALL_ESCALATION_HOURS} hours, call support to escalate.`
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Escalate via call?',
+      `This issue has crossed ${CALL_ESCALATION_HOURS} hours without resolution. You can call support now.`,
+      [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: 'Call support',
+          onPress: () => {
+            void placeSupportCall();
+          }
+        }
+      ]
+    );
   };
 
   const createTicket = async () => {
@@ -132,7 +453,7 @@ export function SupportScreen() {
 
     setBusy(true);
     try {
-      await api.post('/support/tickets', {
+      const response = await api.post('/support/tickets', {
         userId: user.id,
         subject: subject.trim(),
         description: description.trim(),
@@ -140,14 +461,119 @@ export function SupportScreen() {
         tripId: currentJob?.id
       });
 
+      const createdTicketId =
+        response.data && typeof (response.data as { id?: unknown }).id === 'string'
+          ? String((response.data as { id: string }).id)
+          : undefined;
+
       setSubject('');
       setDescription('');
-      await loadTickets();
+      await loadTickets(false);
+
+      if (createdTicketId) {
+        await openTicket(createdTicketId);
+      }
     } catch (createError: unknown) {
       Alert.alert('Support', errorMessage(createError, 'Could not create support ticket.'));
     } finally {
       setBusy(false);
     }
+  };
+
+  const addReplyAttachment = async () => {
+    if (!selectedTicketId) {
+      Alert.alert('Support', 'Open a ticket first to attach images.');
+      return;
+    }
+
+    if (replyAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      Alert.alert('Attachment limit', `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} images per message.`);
+      return;
+    }
+
+    let picked: PickedImage | null = null;
+    try {
+      picked = await pickSupportImageFromLibrary();
+    } catch (imageError: unknown) {
+      Alert.alert('Attachment setup required', String((imageError as Error)?.message ?? 'Unable to open image picker.'));
+      return;
+    }
+
+    if (!picked) {
+      return;
+    }
+
+    setReplyAttachments((previous) => [
+      ...previous,
+      {
+        localId: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        uri: picked.uri,
+        fileName: picked.fileName?.trim() || undefined,
+        contentType: picked.mimeType?.trim() || 'image/jpeg',
+        fileSizeBytes: typeof picked.fileSize === 'number' ? picked.fileSize : undefined
+      }
+    ]);
+  };
+
+  const removeReplyAttachment = (localId: string) => {
+    setReplyAttachments((previous) => previous.filter((attachment) => attachment.localId !== localId));
+  };
+
+  const uploadReplyAttachments = async (ticketId: string, userId: string) => {
+    const uploaded: Array<{
+      fileKey: string;
+      fileUrl: string;
+      fileName?: string;
+      contentType?: string;
+      fileSizeBytes?: number;
+    }> = [];
+
+    for (let index = 0; index < replyAttachments.length; index += 1) {
+      const attachment = replyAttachments[index];
+      const requestedContentType = attachment.contentType || 'image/jpeg';
+      const requestFileName = attachment.fileName || buildDraftFileName(index + 1);
+
+      const uploadRequest = await api.post(`/support/tickets/${ticketId}/messages/upload-url`, {
+        userId,
+        fileName: requestFileName,
+        contentType: requestedContentType
+      });
+
+      const uploadUrl = String(uploadRequest.data?.uploadUrl ?? '');
+      const fileUrl = String(uploadRequest.data?.fileUrl ?? '');
+      const fileKey = String(uploadRequest.data?.fileKey ?? '');
+      const resolvedContentType = String(uploadRequest.data?.contentType ?? requestedContentType);
+
+      if (!fileUrl || !fileKey) {
+        throw new Error('Attachment upload metadata missing');
+      }
+
+      if (uploadUrl && !uploadUrl.startsWith('mock://')) {
+        const fileResponse = await fetch(attachment.uri);
+        const blob = await fileResponse.blob();
+        const putResponse = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': resolvedContentType
+          },
+          body: blob
+        });
+
+        if (!putResponse.ok) {
+          throw new Error('Could not upload support image');
+        }
+      }
+
+      uploaded.push({
+        fileKey,
+        fileUrl,
+        fileName: requestFileName,
+        contentType: resolvedContentType,
+        fileSizeBytes: attachment.fileSizeBytes
+      });
+    }
+
+    return uploaded;
   };
 
   const sendReply = async () => {
@@ -157,12 +583,16 @@ export function SupportScreen() {
 
     setBusy(true);
     try {
+      const uploadedAttachments = await uploadReplyAttachments(selectedTicketId, user.id);
+
       await api.post(`/support/tickets/${selectedTicketId}/messages`, {
         userId: user.id,
-        message: reply.trim()
+        message: reply.trim(),
+        attachments: uploadedAttachments
       });
       setReply('');
-      await loadTickets();
+      setReplyAttachments([]);
+      await Promise.all([loadTickets(false), openTicket(selectedTicketId, false)]);
     } catch (replyError: unknown) {
       Alert.alert('Support', errorMessage(replyError, 'Could not send message.'));
     } finally {
@@ -172,104 +602,271 @@ export function SupportScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.container}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshingList}
+            onRefresh={() => {
+              setRefreshingList(true);
+              void loadTickets(false);
+            }}
+          />
+        }
+      >
         <View style={styles.card}>
           <Text style={styles.title}>Support Center</Text>
-          <Text style={styles.info}>For urgent delivery issues, call support immediately.</Text>
-          <Pressable style={styles.callButton} onPress={() => void callSupport()}>
-            <Text style={styles.callButtonText}>Call {SUPPORT_PHONE}</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Create Ticket</Text>
-          <TextInput
-            value={subject}
-            onChangeText={setSubject}
-            placeholder="Subject"
-            placeholderTextColor="#94A3B8"
-            style={styles.input}
-            maxLength={140}
-          />
-          <TextInput
-            value={description}
-            onChangeText={setDescription}
-            placeholder="Describe issue"
-            placeholderTextColor="#94A3B8"
-            style={[styles.input, styles.textArea]}
-            multiline
-            maxLength={2000}
-          />
-          <Text style={styles.meta}>
-            Context: Order {currentJob?.orderId ?? '--'} • Trip {currentJob?.id ?? '--'}
+          <Text style={styles.info}>Message first. We aim to resolve tickets within {RESOLUTION_TARGET_HOURS} hours.</Text>
+          <Text style={styles.info}>
+            If unresolved after {CALL_ESCALATION_HOURS} hours, call support to escalate.
           </Text>
-          <Pressable
-            style={[styles.primaryButton, busy && styles.disabledButton]}
-            onPress={() => void createTicket()}
-            disabled={busy}
-          >
-            <Text style={styles.primaryButtonText}>{busy ? 'Submitting...' : 'Submit Ticket'}</Text>
+          <Text style={styles.meta}>Support line: {maskedSupportPhone}</Text>
+          <Text style={[styles.meta, escalationEligible ? styles.metaReady : undefined]}>
+            {escalationEligible ? 'Call escalation is available now.' : 'Call unlocks after 24h unresolved.'}
+          </Text>
+          <Pressable style={styles.callButton} onPress={() => void callSupport()}>
+            <Text style={styles.callButtonText}>Escalate by call</Text>
           </Pressable>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>My Tickets</Text>
-          {loading ? <ActivityIndicator color={colors.secondary} style={{ marginTop: 10 }} /> : null}
-
-          {(tickets ?? []).map((ticket) => {
-            const active = ticket.id === selectedTicketId;
-            return (
+        {viewMode === 'inbox' ? (
+          <>
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Create Ticket</Text>
+              <TextInput
+                value={subject}
+                onChangeText={setSubject}
+                placeholder="Subject"
+                placeholderTextColor="#94A3B8"
+                style={styles.input}
+                maxLength={140}
+              />
+              <TextInput
+                value={description}
+                onChangeText={setDescription}
+                placeholder="Describe issue"
+                placeholderTextColor="#94A3B8"
+                style={[styles.input, styles.textArea]}
+                multiline
+                maxLength={2000}
+              />
+              <Text style={styles.meta}>
+                Context: Order {currentJob?.orderId ?? '--'} • Trip {currentJob?.id ?? '--'}
+              </Text>
               <Pressable
-                key={ticket.id}
-                onPress={() => setSelectedTicketId(ticket.id)}
-                style={[styles.ticketRow, active && styles.ticketRowActive]}
+                style={[styles.primaryButton, busy && styles.disabledButton]}
+                onPress={() => void createTicket()}
+                disabled={busy}
               >
-                <Text style={styles.ticketSubject}>{ticket.subject}</Text>
-                <Text style={styles.ticketMeta}>
-                  {ticket.status} • {formatDate(ticket.updatedAt)}
-                </Text>
+                <Text style={styles.primaryButtonText}>{busy ? 'Submitting...' : 'Submit Ticket'}</Text>
               </Pressable>
-            );
-          })}
-
-          {!loading && tickets.length === 0 ? <Text style={styles.info}>No tickets yet.</Text> : null}
-        </View>
-
-        {selectedTicket ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Ticket Thread</Text>
-            <Text style={styles.meta}>Status: {selectedTicket.status}</Text>
-            <View style={styles.threadWrap}>
-              {selectedTicket.messages.map((message) => (
-                <View key={message.id} style={styles.messageBubble}>
-                  <Text style={styles.messageMeta}>
-                    {message.senderType}
-                    {message.senderUser?.name ? ` • ${message.senderUser.name}` : ''}
-                  </Text>
-                  <Text style={styles.messageText}>{message.message}</Text>
-                  <Text style={styles.messageMeta}>{formatDate(message.createdAt)}</Text>
-                </View>
-              ))}
             </View>
 
-            <TextInput
-              value={reply}
-              onChangeText={setReply}
-              placeholder="Add follow-up message"
-              placeholderTextColor="#94A3B8"
-              style={[styles.input, styles.textArea]}
-              multiline
-              maxLength={2000}
-            />
+            <View style={styles.card}>
+              <View style={styles.ticketHeaderRow}>
+                <Text style={styles.cardTitle}>My Tickets</Text>
+                <Text style={styles.meta}>{tickets.length} total</Text>
+              </View>
+
+              {loadingList ? <ActivityIndicator color={colors.secondary} style={{ marginTop: 10 }} /> : null}
+
+              {tickets.map((ticket) => {
+                const statusLabel = getStatusLabel(ticket.status);
+                return (
+                  <Pressable key={ticket.id} onPress={() => void openTicket(ticket.id)} style={styles.ticketRow}>
+                    <View style={styles.ticketTopRow}>
+                      <Text style={styles.ticketSubject}>{ticket.subject}</Text>
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          ticket.status === 'RESOLVED'
+                            ? styles.statusResolved
+                            : ticket.status === 'WAITING_FOR_USER'
+                              ? styles.statusWaiting
+                              : ticket.status === 'IN_PROGRESS'
+                                ? styles.statusInProgress
+                                : styles.statusOpen
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.statusBadgeText,
+                            ticket.status === 'RESOLVED'
+                              ? styles.statusResolvedText
+                              : ticket.status === 'WAITING_FOR_USER'
+                                ? styles.statusWaitingText
+                                : ticket.status === 'IN_PROGRESS'
+                                  ? styles.statusInProgressText
+                                  : styles.statusOpenText
+                          ]}
+                        >
+                          {statusLabel}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.ticketMeta}>Updated {formatDate(ticket.updatedAt)}</Text>
+                    <Text style={styles.ticketMeta}>Messages: {ticket.messageCount}</Text>
+                  </Pressable>
+                );
+              })}
+
+              {!loadingList && tickets.length === 0 ? (
+                <Text style={styles.info}>No tickets yet. Raise your first issue when needed.</Text>
+              ) : null}
+            </View>
+          </>
+        ) : (
+          <View style={styles.card}>
             <Pressable
-              style={[styles.primaryButton, busy && styles.disabledButton]}
-              onPress={() => void sendReply()}
-              disabled={busy}
+              style={styles.backButton}
+              onPress={() => {
+                setViewMode('inbox');
+                setReply('');
+                setReplyAttachments([]);
+              }}
             >
-              <Text style={styles.primaryButtonText}>{busy ? 'Sending...' : 'Send Message'}</Text>
+              <Text style={styles.backButtonText}>← Back to Ticket List</Text>
             </Pressable>
+
+            {loadingDetail || !selectedTicket ? (
+              <ActivityIndicator color={colors.secondary} style={{ marginVertical: 14 }} />
+            ) : (
+              <>
+                <View style={styles.ticketTopRow}>
+                  <Text style={styles.cardTitle}>{selectedTicket.subject}</Text>
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      selectedTicket.status === 'RESOLVED'
+                        ? styles.statusResolved
+                        : selectedTicket.status === 'WAITING_FOR_USER'
+                          ? styles.statusWaiting
+                          : selectedTicket.status === 'IN_PROGRESS'
+                            ? styles.statusInProgress
+                            : styles.statusOpen
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusBadgeText,
+                        selectedTicket.status === 'RESOLVED'
+                          ? styles.statusResolvedText
+                          : selectedTicket.status === 'WAITING_FOR_USER'
+                            ? styles.statusWaitingText
+                            : selectedTicket.status === 'IN_PROGRESS'
+                              ? styles.statusInProgressText
+                              : styles.statusOpenText
+                      ]}
+                    >
+                      {getStatusLabel(selectedTicket.status)}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={styles.meta}>Opened: {formatDate(selectedTicket.createdAt)}</Text>
+                <Text style={styles.meta}>Updated: {formatDate(selectedTicket.updatedAt)}</Text>
+                <Text style={styles.meta}>Order: {selectedTicket.orderId ?? '--'} • Trip: {selectedTicket.tripId ?? '--'}</Text>
+
+                <View style={styles.descriptionBox}>
+                  <Text style={styles.descriptionTitle}>Issue Summary</Text>
+                  <Text style={styles.descriptionText}>{selectedTicket.description || '--'}</Text>
+                </View>
+
+                <View style={styles.threadWrap}>
+                  {selectedTicket.messages.length === 0 ? (
+                    <Text style={styles.meta}>No messages yet.</Text>
+                  ) : (
+                    selectedTicket.messages.map((message) => {
+                      const userMessage = message.senderType === 'USER';
+                      const systemMessage = message.senderType === 'SYSTEM';
+                      return (
+                        <View
+                          key={message.id}
+                          style={[
+                            styles.messageBubble,
+                            userMessage
+                              ? styles.messageBubbleUser
+                              : systemMessage
+                                ? styles.messageBubbleSystem
+                                : styles.messageBubbleAdmin
+                          ]}
+                        >
+                          <Text style={styles.messageMeta}>
+                            {message.senderType}
+                            {message.senderUser?.name ? ` • ${message.senderUser.name}` : ''}
+                          </Text>
+                          <Text style={styles.messageText}>{message.message}</Text>
+
+                          {message.attachments.length > 0 ? (
+                            <View style={styles.messageAttachmentGrid}>
+                              {message.attachments.map((attachment) => (
+                                <View key={attachment.id} style={styles.messageAttachmentCard}>
+                                  <Image source={{ uri: attachment.fileUrl }} style={styles.messageAttachmentImage} />
+                                  <Text style={styles.messageAttachmentLabel} numberOfLines={1}>
+                                    {attachment.fileName || 'Image'}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
+
+                          <Text style={styles.messageMeta}>{formatDate(message.createdAt)}</Text>
+                        </View>
+                      );
+                    })
+                  )}
+                </View>
+
+                <TextInput
+                  value={reply}
+                  onChangeText={setReply}
+                  placeholder={selectedTicket.status === 'RESOLVED' ? 'Send message to reopen this ticket' : 'Add follow-up message'}
+                  placeholderTextColor="#94A3B8"
+                  style={[styles.input, styles.textArea]}
+                  multiline
+                  maxLength={2000}
+                />
+                <Text style={styles.meta}>Type in any language. Our support team will review your message directly.</Text>
+
+                <View style={styles.composeActionRow}>
+                  <Pressable
+                    style={[styles.secondaryButton, styles.composeAttachButton]}
+                    onPress={() => void addReplyAttachment()}
+                    disabled={busy}
+                  >
+                    <Text style={styles.secondaryText}>Attach Image</Text>
+                  </Pressable>
+                  <Text style={styles.meta}>{replyAttachments.length}/{MAX_ATTACHMENTS_PER_MESSAGE} attached</Text>
+                </View>
+
+                {replyAttachments.length > 0 ? (
+                  <View style={styles.draftAttachmentGrid}>
+                    {replyAttachments.map((attachment) => (
+                      <View key={attachment.localId} style={styles.draftAttachmentCard}>
+                        <Image source={{ uri: attachment.uri }} style={styles.draftAttachmentImage} />
+                        <Pressable
+                          style={styles.draftAttachmentRemove}
+                          onPress={() => removeReplyAttachment(attachment.localId)}
+                        >
+                          <Text style={styles.draftAttachmentRemoveText}>Remove</Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+
+                <Pressable
+                  style={[styles.primaryButton, busy && styles.disabledButton]}
+                  onPress={() => void sendReply()}
+                  disabled={busy}
+                >
+                  <Text style={styles.primaryButtonText}>{busy ? 'Sending...' : 'Send Message'}</Text>
+                </Pressable>
+              </>
+            )}
           </View>
-        ) : null}
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -302,7 +899,8 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontFamily: typography.bodyBold,
     color: colors.accent,
-    fontSize: 16
+    fontSize: 16,
+    flexShrink: 1
   },
   info: {
     fontFamily: typography.body,
@@ -313,6 +911,9 @@ const styles = StyleSheet.create({
     fontFamily: typography.body,
     color: '#64748B',
     fontSize: 12
+  },
+  metaReady: {
+    color: colors.secondary
   },
   callButton: {
     marginTop: 6,
@@ -338,7 +939,7 @@ const styles = StyleSheet.create({
     fontSize: 14
   },
   textArea: {
-    minHeight: 80,
+    minHeight: 84,
     textAlignVertical: 'top'
   },
   primaryButton: {
@@ -356,38 +957,129 @@ const styles = StyleSheet.create({
   disabledButton: {
     opacity: 0.6
   },
+  ticketHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+  },
   ticketRow: {
     borderWidth: 1,
-    borderColor: '#FED7AA',
+    borderColor: '#E2E8F0',
     borderRadius: radius.md,
-    backgroundColor: '#FFFBEB',
+    backgroundColor: '#F8FAFC',
     padding: spacing.sm,
-    gap: 2
+    gap: 4
   },
-  ticketRowActive: {
-    borderColor: colors.primary,
-    backgroundColor: '#FFF7ED'
+  ticketTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm
   },
   ticketSubject: {
     fontFamily: typography.bodyBold,
     color: colors.accent,
-    fontSize: 14
+    fontSize: 14,
+    flex: 1
   },
   ticketMeta: {
     fontFamily: typography.body,
     color: '#64748B',
     fontSize: 12
   },
+  backButton: {
+    alignSelf: 'flex-start',
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    marginBottom: 6
+  },
+  backButtonText: {
+    fontFamily: typography.bodyBold,
+    color: '#1D4ED8',
+    fontSize: 12
+  },
+  statusBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1
+  },
+  statusBadgeText: {
+    fontFamily: typography.bodyBold,
+    fontSize: 11
+  },
+  statusOpen: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FDBA74'
+  },
+  statusOpenText: {
+    color: '#C2410C'
+  },
+  statusInProgress: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#A5B4FC'
+  },
+  statusInProgressText: {
+    color: '#3730A3'
+  },
+  statusWaiting: {
+    backgroundColor: '#ECFEFF',
+    borderColor: '#67E8F9'
+  },
+  statusWaitingText: {
+    color: '#0F766E'
+  },
+  statusResolved: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#86EFAC'
+  },
+  statusResolvedText: {
+    color: '#166534'
+  },
+  descriptionBox: {
+    marginTop: spacing.xs,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: radius.md,
+    backgroundColor: '#F8FAFC',
+    padding: spacing.sm,
+    gap: 4
+  },
+  descriptionTitle: {
+    fontFamily: typography.bodyBold,
+    fontSize: 12,
+    color: '#334155'
+  },
+  descriptionText: {
+    fontFamily: typography.body,
+    fontSize: 13,
+    color: colors.accent
+  },
   threadWrap: {
+    marginTop: spacing.sm,
     gap: spacing.xs
   },
   messageBubble: {
     borderWidth: 1,
-    borderColor: '#FED7AA',
     borderRadius: radius.md,
-    backgroundColor: '#FFF7ED',
     padding: spacing.sm,
-    gap: 4
+    gap: 6
+  },
+  messageBubbleUser: {
+    borderColor: '#FED7AA',
+    backgroundColor: '#FFF7ED'
+  },
+  messageBubbleAdmin: {
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF'
+  },
+  messageBubbleSystem: {
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC'
   },
   messageMeta: {
     fontFamily: typography.body,
@@ -398,5 +1090,81 @@ const styles = StyleSheet.create({
     fontFamily: typography.body,
     color: colors.accent,
     fontSize: 13
+  },
+  messageAttachmentGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs
+  },
+  messageAttachmentCard: {
+    width: 112,
+    gap: 4
+  },
+  messageAttachmentImage: {
+    width: 112,
+    height: 112,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    backgroundColor: '#FFFBEB'
+  },
+  messageAttachmentLabel: {
+    fontFamily: typography.body,
+    fontSize: 11,
+    color: '#475569'
+  },
+  composeActionRow: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.xs
+  },
+  composeAttachButton: {
+    flex: 1,
+    marginTop: 0
+  },
+  draftAttachmentGrid: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs
+  },
+  draftAttachmentCard: {
+    width: 112,
+    gap: 4
+  },
+  draftAttachmentImage: {
+    width: 112,
+    height: 112,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: '#FDBA74',
+    backgroundColor: '#FFF7ED'
+  },
+  draftAttachmentRemove: {
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+    borderRadius: radius.sm,
+    paddingVertical: 4,
+    alignItems: 'center'
+  },
+  draftAttachmentRemoveText: {
+    fontFamily: typography.bodyBold,
+    color: '#B91C1C',
+    fontSize: 11
+  },
+  secondaryButton: {
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.secondary,
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    backgroundColor: '#ECFDF5'
+  },
+  secondaryText: {
+    fontFamily: typography.bodyBold,
+    color: colors.secondary
   }
 });

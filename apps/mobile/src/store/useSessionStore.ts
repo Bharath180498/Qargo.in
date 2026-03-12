@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api, { setAuthToken } from '../services/api';
+import { unregisterCustomerPushToken } from '../services/pushNotifications';
 import type { SessionUser } from '../types';
 
 type Role = SessionUser['role'];
@@ -72,6 +73,8 @@ export const useSessionStore = create<SessionState>((set) => ({
     }
   },
   logout() {
+    const customerId = useSessionStore.getState().user?.id;
+    void unregisterCustomerPushToken(customerId);
     setAuthToken(undefined);
     set({ token: undefined, user: undefined, role: undefined, error: undefined });
   }

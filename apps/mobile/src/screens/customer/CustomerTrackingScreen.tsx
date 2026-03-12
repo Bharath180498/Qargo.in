@@ -1,11 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Alert, Linking, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Image,
+  Linking,
+  Modal,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  Vibration,
+  View
+} from 'react-native';
 import { io } from 'socket.io-client';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import api, { REALTIME_BASE_URL } from '../../services/api';
 import { useCustomerStore } from '../../store/useCustomerStore';
 import type { RootStackParamList } from '../../types/navigation';
 import MapView, { Marker, Polyline } from '../../components/maps';
+import { DeliverySignaturePreview } from '../../components/DeliverySignaturePreview';
 import appConfig from '../../../app.json';
 
 interface DriverPoint {
@@ -250,6 +263,8 @@ export function CustomerTrackingScreen({ navigation }: Props) {
   const [clockNow, setClockNow] = useState(Date.now());
   const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinate[]>([]);
   const [driverDistanceKm, setDriverDistanceKm] = useState<number | undefined>();
+  const arrivalAlertedOrderRef = useRef<string | null>(null);
+  const deliveryAlertedOrderRef = useRef<string | null>(null);
 
   useEffect(() => {
     setOrder(undefined);
@@ -258,6 +273,8 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     setDispatchDecisions([]);
     setRouteCoordinates([]);
     setDriverDistanceKm(undefined);
+    arrivalAlertedOrderRef.current = null;
+    deliveryAlertedOrderRef.current = null;
   }, [activeOrderId]);
 
   useEffect(() => {
@@ -388,7 +405,19 @@ export function CustomerTrackingScreen({ navigation }: Props) {
   const assignedDriver = order?.trip?.driver;
   const assignedDriverUser = assignedDriver?.user;
   const assignedDriverVehicle = assignedDriver?.vehicles?.[0];
-  const assignedDriverUpiId = assignedDriver?.payoutAccount?.upiId;
+  const deliveryProof = order?.trip?.deliveryProof;
+  const proofReceiverName = typeof deliveryProof?.receiverName === 'string' ? deliveryProof.receiverName : '';
+  const proofPhotoUrl = typeof deliveryProof?.photoUrl === 'string' ? deliveryProof.photoUrl : '';
+  const proofCapturedAt =
+    typeof deliveryProof?.signatureCapturedAt === 'string'
+      ? deliveryProof.signatureCapturedAt
+      : typeof deliveryProof?.createdAt === 'string'
+      ? deliveryProof.createdAt
+      : undefined;
+  const hasDeliveryProof = Boolean(proofReceiverName || proofPhotoUrl || deliveryProof?.receiverSignature);
+  const tripPreferredUpiId = order?.trip?.driverPreferredUpiId;
+  const tripPreferredPaymentLabel = order?.trip?.driverPreferredPaymentLabel;
+  const assignedDriverUpiId = tripPreferredUpiId ?? assignedDriver?.payoutAccount?.upiId;
   const assignedDriverStaticPoint =
     typeof assignedDriver?.currentLat === 'number' && typeof assignedDriver?.currentLng === 'number'
       ? {
@@ -437,10 +466,21 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     order?.payment?.provider === 'WALLET' && order?.payment?.status === 'PENDING'
       ? 'CASH ON DELIVERY'
       : order?.payment?.status ?? 'PENDING';
-  const paymentSubtitle =
+  const paymentStatusKey = String(order?.payment?.status ?? 'PENDING').toUpperCase();
+  const paymentPending = paymentStatusKey !== 'CAPTURED';
+  const driverPaymentPreference = tripPreferredPaymentLabel ?? tripPreferredUpiId;
+  const paymentSubtitle = [
+    driverPaymentPreference ? `Driver prefers ${driverPaymentPreference}` : undefined,
     order?.payment?.provider === 'WALLET' && order?.payment?.status === 'PENDING'
       ? 'Cash selected, to be collected at delivery'
-      : `${order?.payment?.status ?? 'Pending payment'} - tap to pay or change method`;
+      : `${order?.payment?.status ?? 'Pending payment'} - tap to pay or change method`,
+    hasAssignedDriver
+      ? 'UPI is available during or after the ride'
+      : 'UPI unlocks once driver accepts your ride',
+    'Payments are held by QARGO and settled after delivery'
+  ]
+    .filter(Boolean)
+    .join(' • ');
   const isCancelledOrder = order?.status === 'CANCELLED';
   const showCompletionSheet = order?.status === 'DELIVERED' && !summaryClosed && !isCancelledOrder;
   const cancellationState = useMemo(() => {
@@ -487,22 +527,74 @@ export function CustomerTrackingScreen({ navigation }: Props) {
     };
   }, [activeOrderId, clockNow, order]);
   const canCancelBooking = cancellationState.canCancel;
+  const isTransitStage = normalizedTripStatus === 'IN_TRANSIT' || normalizedTripStatus === 'COMPLETED';
   const routeDestinationLabel =
-    normalizedTripStatus === 'IN_TRANSIT' || normalizedTripStatus === 'COMPLETED' ? 'drop' : 'pickup';
+    isTransitStage ? 'drop' : 'pickup';
   const routeDestinationLat =
-    normalizedTripStatus === 'IN_TRANSIT' || normalizedTripStatus === 'COMPLETED'
-      ? drop.latitude
-      : pickup.latitude;
+    isTransitStage ? drop.latitude : pickup.latitude;
   const routeDestinationLng =
-    normalizedTripStatus === 'IN_TRANSIT' || normalizedTripStatus === 'COMPLETED'
-      ? drop.longitude
-      : pickup.longitude;
+    isTransitStage ? drop.longitude : pickup.longitude;
   const routeOriginLat = liveDriver?.lat ?? pickup.latitude;
   const routeOriginLng = liveDriver?.lng ?? pickup.longitude;
+  const pickupDistanceKm = liveDriver
+    ? haversineDistanceKm(
+        { lat: liveDriver.lat, lng: liveDriver.lng },
+        { lat: pickup.latitude, lng: pickup.longitude }
+      )
+    : undefined;
+  const dropDistanceKm = liveDriver
+    ? haversineDistanceKm(
+        { lat: liveDriver.lat, lng: liveDriver.lng },
+        { lat: drop.latitude, lng: drop.longitude }
+      )
+    : undefined;
+  const driverAtPickup = Boolean(!isTransitStage && typeof pickupDistanceKm === 'number' && pickupDistanceKm <= 0.15);
+  const effectiveDriverDistanceKm =
+    (isTransitStage ? dropDistanceKm : pickupDistanceKm) ?? driverDistanceKm;
   const driverDistanceLabel =
-    typeof driverDistanceKm === 'number'
-      ? `${driverDistanceKm.toFixed(1)} km to ${routeDestinationLabel}`
+    driverAtPickup
+      ? 'Driver is at pickup'
+      : typeof effectiveDriverDistanceKm === 'number'
+      ? `${effectiveDriverDistanceKm.toFixed(1)} km to ${routeDestinationLabel}`
       : 'Distance will appear once driver location is live';
+
+  useEffect(() => {
+    if (!activeOrderId || !hasAssignedDriver) {
+      return;
+    }
+
+    if (arrivalAlertedOrderRef.current === activeOrderId) {
+      return;
+    }
+
+    const arrivedByStatus = normalizedTripStatus === 'ARRIVED_PICKUP';
+    if (!driverAtPickup && !arrivedByStatus) {
+      return;
+    }
+
+    arrivalAlertedOrderRef.current = activeOrderId;
+    Vibration.vibrate([0, 250, 120, 350], false);
+    Alert.alert('Driver has arrived', 'Your driver is at pickup. Please hand over your items.');
+  }, [activeOrderId, driverAtPickup, hasAssignedDriver, normalizedTripStatus]);
+
+  useEffect(() => {
+    if (!activeOrderId || order?.status !== 'DELIVERED' || !hasDeliveryProof) {
+      return;
+    }
+
+    if (deliveryAlertedOrderRef.current === activeOrderId) {
+      return;
+    }
+
+    deliveryAlertedOrderRef.current = activeOrderId;
+    Vibration.vibrate([0, 220, 100, 220], false);
+    Alert.alert(
+      'Delivery completed',
+      proofReceiverName
+        ? `Delivered successfully to ${proofReceiverName}. Proof of delivery is available in this trip.`
+        : 'Delivered successfully. Proof of delivery is available in this trip.'
+    );
+  }, [activeOrderId, hasDeliveryProof, order?.status, proofReceiverName]);
 
   useEffect(() => {
     if (!activeOrderId) {
@@ -934,8 +1026,13 @@ export function CustomerTrackingScreen({ navigation }: Props) {
                     <Text style={styles.driverInfoValue}>{assignedDriver?.licenseNumber ?? 'Pending'}</Text>
                   </View>
                   <View style={styles.driverInfoItem}>
-                    <Text style={styles.driverInfoLabel}>Driver UPI</Text>
-                    <Text style={styles.driverInfoValue}>{assignedDriverUpiId ?? 'Pending'}</Text>
+                    <Text style={styles.driverInfoLabel}>
+                      {tripPreferredUpiId ? 'Driver preferred UPI' : 'Driver UPI'}
+                    </Text>
+                    <Text style={styles.driverInfoValue}>
+                      {assignedDriverUpiId ?? 'Pending'}
+                      {tripPreferredPaymentLabel ? ` (${tripPreferredPaymentLabel})` : ''}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -952,6 +1049,20 @@ export function CustomerTrackingScreen({ navigation }: Props) {
               <View style={styles.ewayCard}>
                 <Text style={styles.ewayLabel}>GST e-way bill</Text>
                 <Text style={styles.ewayNumber}>{ewayDisplay}</Text>
+              </View>
+            ) : null}
+
+            {hasDeliveryProof ? (
+              <View style={styles.proofCard}>
+                <Text style={styles.proofTitle}>Proof of delivery</Text>
+                <Text style={styles.proofMeta}>Receiver: {proofReceiverName || 'Captured'}</Text>
+                <Text style={styles.proofMeta}>
+                  Captured: {proofCapturedAt ? new Date(proofCapturedAt).toLocaleString() : 'N/A'}
+                </Text>
+                {proofPhotoUrl ? (
+                  <Image source={{ uri: proofPhotoUrl }} style={styles.proofImage} resizeMode="cover" />
+                ) : null}
+                <DeliverySignaturePreview signature={deliveryProof?.receiverSignature} height={96} />
               </View>
             ) : null}
 
@@ -997,6 +1108,20 @@ export function CustomerTrackingScreen({ navigation }: Props) {
               </View>
             </View>
 
+            {hasDeliveryProof ? (
+              <View style={styles.summaryProofCard}>
+                <Text style={styles.summarySectionTitle}>Proof of delivery</Text>
+                <Text style={styles.summaryProofMeta}>Receiver: {proofReceiverName || 'Captured'}</Text>
+                <Text style={styles.summaryProofMeta}>
+                  Captured: {proofCapturedAt ? new Date(proofCapturedAt).toLocaleString() : 'N/A'}
+                </Text>
+                {proofPhotoUrl ? (
+                  <Image source={{ uri: proofPhotoUrl }} style={styles.summaryProofImage} resizeMode="cover" />
+                ) : null}
+                <DeliverySignaturePreview signature={deliveryProof?.receiverSignature} height={88} />
+              </View>
+            ) : null}
+
             <Text style={styles.summarySectionTitle}>Tip your driver</Text>
             <View style={styles.tipRow}>
               {[0, 20, 50, 100].map((amount) => (
@@ -1027,6 +1152,11 @@ export function CustomerTrackingScreen({ navigation }: Props) {
             </View>
 
             <View style={styles.summaryActions}>
+              {paymentPending ? (
+                <Pressable style={styles.summaryPayButton} onPress={() => navigation.navigate('CustomerPayment')}>
+                  <Text style={styles.summaryPayButtonText}>Pay now</Text>
+                </Pressable>
+              ) : null}
               <Pressable style={styles.rateButton} onPress={() => void submitRating()} disabled={ratingSubmitted}>
                 <Text style={styles.rateButtonText}>{ratingSubmitted ? 'Rating submitted' : 'Submit rating'}</Text>
               </Pressable>
@@ -1477,6 +1607,32 @@ const styles = StyleSheet.create({
     fontFamily: 'Sora_700Bold',
     fontSize: 14
   },
+  proofCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    backgroundColor: '#ECFDF5',
+    padding: 10,
+    gap: 6
+  },
+  proofTitle: {
+    color: '#065F46',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13
+  },
+  proofMeta: {
+    color: '#0F172A',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12
+  },
+  proofImage: {
+    width: '100%',
+    height: 140,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    backgroundColor: '#DCFCE7'
+  },
   timelineTitle: {
     color: '#0F172A',
     fontFamily: 'Manrope_700Bold',
@@ -1624,6 +1780,27 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_700Bold',
     fontSize: 13
   },
+  summaryProofCard: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    backgroundColor: '#F0FDF4',
+    padding: 10,
+    gap: 6
+  },
+  summaryProofMeta: {
+    color: '#334155',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 12
+  },
+  summaryProofImage: {
+    width: '100%',
+    height: 130,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    backgroundColor: '#DCFCE7'
+  },
   tipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1652,6 +1829,21 @@ const styles = StyleSheet.create({
   summaryActions: {
     flexDirection: 'row',
     gap: 10
+  },
+  summaryPayButton: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10
+  },
+  summaryPayButtonText: {
+    color: '#1D4ED8',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13
   },
   summaryDoneButton: {
     flex: 1,

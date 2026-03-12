@@ -33,13 +33,33 @@ export class ExpoPushProvider implements PushProvider {
         };
       }
 
-      const json = (await response.json()) as {
-        data?: { id?: string };
+      const json = (await response.json().catch(() => ({}))) as {
+        data?:
+          | {
+              status?: 'ok' | 'error';
+              id?: string;
+              message?: string;
+              details?: { error?: string };
+            }
+          | Array<{
+              status?: 'ok' | 'error';
+              id?: string;
+              message?: string;
+              details?: { error?: string };
+            }>;
       };
+
+      const payload = Array.isArray(json.data) ? json.data[0] : json.data;
+      if (payload?.status === 'error') {
+        return {
+          success: false,
+          error: payload.details?.error ?? payload.message ?? 'Expo push error'
+        };
+      }
 
       return {
         success: true,
-        providerRef: json?.data?.id
+        providerRef: payload?.id
       };
     } catch (error: unknown) {
       return {
@@ -49,4 +69,3 @@ export class ExpoPushProvider implements PushProvider {
     }
   }
 }
-

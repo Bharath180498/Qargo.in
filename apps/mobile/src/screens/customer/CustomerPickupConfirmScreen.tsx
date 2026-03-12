@@ -6,6 +6,7 @@ import {
   Easing,
   Keyboard,
   KeyboardEvent,
+  Linking,
   Platform,
   Pressable,
   SafeAreaView,
@@ -65,6 +66,26 @@ const MOBILE_GOOGLE_MAPS_API_KEY =
 
 function formatCoordinateAddress(lat: number, lng: number) {
   return `Lat ${lat.toFixed(5)}, Lng ${lng.toFixed(5)}`;
+}
+
+function extractErrorMessage(error: unknown, fallback: string) {
+  if (typeof error === 'object' && error !== null) {
+    if ('response' in error) {
+      const response = (error as { response?: { data?: { message?: unknown } } }).response;
+      const message = response?.data?.message;
+      if (typeof message === 'string' && message.trim().length > 0) {
+        return message;
+      }
+      if (Array.isArray(message) && typeof message[0] === 'string') {
+        return message[0];
+      }
+    }
+    if ('message' in error && typeof (error as { message?: unknown }).message === 'string') {
+      return (error as { message: string }).message;
+    }
+  }
+
+  return fallback;
 }
 
 function createPlacesSessionToken() {
@@ -515,6 +536,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
   const [initializing, setInitializing] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [keyboardRaised, setKeyboardRaised] = useState(false);
+  const [pickupAutoPinnedFromLocation, setPickupAutoPinnedFromLocation] = useState(false);
 
   const activeQuery = step === 'PICKUP' ? pickupQuery : dropQuery;
   const activeSearchSelected = step === 'PICKUP' ? pickupSearchSelected : dropSearchSelected;
@@ -573,10 +595,16 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
   useEffect(() => {
     const initialize = async () => {
       let seededPickup = draftPickup;
+      let locationPermissionDenied = false;
+      let locationPermissionCanAskAgain = true;
 
       if (!seededPickup) {
         try {
-          const permission = await Location.requestForegroundPermissionsAsync();
+          const existingPermission = await Location.getForegroundPermissionsAsync();
+          const permission =
+            existingPermission.status === 'granted'
+              ? existingPermission
+              : await Location.requestForegroundPermissionsAsync();
 
           if (permission.status === 'granted') {
             const lastKnown = await Location.getLastKnownPositionAsync();
@@ -590,7 +618,10 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
               lat: position.coords.latitude,
               lng: position.coords.longitude,
               address: 'Current location'
-            };
+              };
+          } else {
+            locationPermissionDenied = true;
+            locationPermissionCanAskAgain = permission.canAskAgain;
           }
         } catch {
           seededPickup = undefined;
@@ -602,6 +633,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
         lng: FALLBACK_REGION.longitude,
         address: 'Pickup location'
       };
+      const pickupSeededFromCurrentLocation = Boolean(seededPickup) && !Boolean(draftPickup);
 
       const nextDrop = draftDrop;
 
@@ -609,14 +641,35 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
       setDropPoint(nextDrop);
       setPickupQuery(draftPickup?.address ?? '');
       setDropQuery(draftDrop?.address ?? '');
-      setPickupSearchSelected(Boolean(draftPickup));
+      setPickupSearchSelected(Boolean(draftPickup) || pickupSeededFromCurrentLocation);
       setDropSearchSelected(Boolean(draftDrop));
+      setPickupAutoPinnedFromLocation(pickupSeededFromCurrentLocation);
       setMapRegion((current) => ({
         ...current,
         latitude: nextPickup.lat,
         longitude: nextPickup.lng
       }));
       setInitializing(false);
+
+      if (locationPermissionDenied) {
+        Alert.alert(
+          'Allow location for auto pickup',
+          locationPermissionCanAskAgain
+            ? 'Enable location access so we can pin pickup at your current position automatically.'
+            : 'Location access is blocked. Open phone settings and allow location to auto-pin pickup.',
+          locationPermissionCanAskAgain
+            ? [{ text: 'OK' }]
+            : [
+                { text: 'Not now', style: 'cancel' },
+                {
+                  text: 'Open settings',
+                  onPress: () => {
+                    void Linking.openSettings();
+                  }
+                }
+              ]
+        );
+      }
     };
 
     void initialize();
@@ -755,6 +808,9 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
     if (step === 'PICKUP') {
       setPickupQuery(value);
       setPickupSearchSelected(false);
+      if (value.trim().length > 0) {
+        setPickupAutoPinnedFromLocation(false);
+      }
       return;
     }
 
@@ -796,6 +852,7 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
         setPickupPoint(point);
         setPickupQuery(point.address);
         setPickupSearchSelected(true);
+        setPickupAutoPinnedFromLocation(false);
       } else {
         setDropPoint(point);
         setDropQuery(point.address);
@@ -945,8 +1002,13 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
       });
 
       navigation.navigate('CustomerTripSelect');
-    } catch {
-      Alert.alert('Could not continue', 'Unable to fetch trips. Verify backend and internet access.');
+    } catch (error) {
+      const message = extractErrorMessage(error, 'Unable to fetch trips. Verify backend and internet access.');
+      if (message.toLowerCase().includes('city-to-city') || message.toLowerCase().includes('coming soon')) {
+        Alert.alert('City-to-city coming soon', message);
+      } else {
+        Alert.alert('Could not continue', message);
+      }
     } finally {
       setConfirming(false);
     }
@@ -1061,7 +1123,13 @@ export function CustomerPickupConfirmScreen({ navigation }: Props) {
           <View style={styles.searchBlock}>
             <Text style={styles.searchPrompt}>{step === 'PICKUP' ? 'Type pick-up location' : 'Type drop-off location'}</Text>
             <TextInput
-              placeholder={step === 'PICKUP' ? 'Search pickup area, road, landmark' : 'Search drop area, road, landmark'}
+              placeholder={
+                step === 'PICKUP'
+                  ? pickupAutoPinnedFromLocation && pickupQuery.trim().length === 0
+                    ? 'Pinned at your current location - type to change'
+                    : 'Search pickup area, road, landmark'
+                  : 'Search drop area, road, landmark'
+              }
               value={activeQuery}
               onChangeText={setActiveQuery}
               autoCorrect={false}

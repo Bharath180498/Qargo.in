@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   Prisma,
   SupportMessageSenderType,
@@ -11,10 +17,18 @@ import { AdminListSupportTicketsQueryDto } from './dto/admin-list-support-ticket
 import { AdminReplySupportTicketDto } from './dto/admin-reply-support-ticket.dto';
 import { AdminUpdateSupportTicketStatusDto } from './dto/admin-update-support-ticket-status.dto';
 import { CreateSupportTicketDto } from './dto/create-support-ticket.dto';
+import { GenerateSupportMessageUploadUrlDto } from './dto/generate-support-message-upload-url.dto';
+import { SupportMessageAttachmentDto } from './dto/support-message-attachment.dto';
+import { buildS3UploadUrl } from '../../common/utils/s3-upload.util';
 
 @Injectable()
 export class SupportService {
-  constructor(private readonly prisma: PrismaService) {}
+  private static readonly MAX_MESSAGE_ATTACHMENTS = 5;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService
+  ) {}
 
   private async getRequester(userId: string) {
     const user = await this.prisma.user.findUnique({
@@ -31,6 +45,181 @@ export class SupportService {
     }
 
     return user;
+  }
+
+  private buildSafeFileName(fileName: string) {
+    const trimmed = fileName.trim();
+    if (!trimmed) {
+      return `support-attachment-${Date.now()}.jpg`;
+    }
+
+    const normalized = trimmed.replace(/[^a-zA-Z0-9._-]/g, '_');
+    return normalized.slice(-120) || `support-attachment-${Date.now()}.jpg`;
+  }
+
+  private get supportTranslationEnabled() {
+    return this.configService.get<boolean>('supportTranslation.enabled') ?? false;
+  }
+
+  private get supportTranslationTargetLanguage() {
+    return (this.configService.get<string>('supportTranslation.targetLanguage') ?? 'en')
+      .trim()
+      .toLowerCase();
+  }
+
+  private get supportTranslationApiKey() {
+    return this.configService.get<string>('supportTranslation.googleApiKey') ?? '';
+  }
+
+  private get supportTranslationApiUrl() {
+    return this.configService.get<string>('supportTranslation.googleApiUrl') ?? '';
+  }
+
+  private decodeHtmlEntities(value: string) {
+    return value
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+  }
+
+  private async translateTextForSupport(text: string): Promise<{
+    sourceLanguage?: string;
+    translatedEnglish?: string;
+    translationProvider?: string;
+  }> {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return {};
+    }
+
+    if (!this.supportTranslationEnabled) {
+      return {};
+    }
+
+    const apiKey = this.supportTranslationApiKey.trim();
+    const apiUrl = this.supportTranslationApiUrl.trim();
+    if (!apiKey || !apiUrl) {
+      return {};
+    }
+
+    try {
+      const targetLanguage = this.supportTranslationTargetLanguage || 'en';
+      const body = new URLSearchParams();
+      body.set('q', trimmed);
+      body.set('target', targetLanguage);
+      body.set('format', 'text');
+
+      const separator = apiUrl.includes('?') ? '&' : '?';
+      const response = await fetch(`${apiUrl}${separator}key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+        },
+        body: body.toString()
+      });
+
+      if (!response.ok) {
+        return {};
+      }
+
+      const parsed = (await response.json()) as {
+        data?: {
+          translations?: Array<{
+            translatedText?: string;
+            detectedSourceLanguage?: string;
+          }>;
+        };
+      };
+
+      const first = parsed.data?.translations?.[0];
+      const translatedRaw =
+        typeof first?.translatedText === 'string' ? this.decodeHtmlEntities(first.translatedText).trim() : '';
+      const sourceLanguage =
+        typeof first?.detectedSourceLanguage === 'string'
+          ? first.detectedSourceLanguage.trim().toLowerCase()
+          : undefined;
+
+      if (!translatedRaw) {
+        return {
+          sourceLanguage
+        };
+      }
+
+      const sameAsInput = translatedRaw.toLowerCase() === trimmed.toLowerCase();
+      if (sameAsInput) {
+        return {
+          sourceLanguage
+        };
+      }
+
+      return {
+        sourceLanguage,
+        translatedEnglish: translatedRaw,
+        translationProvider: 'google-translate-v2'
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  private normalizeAttachmentPayload(attachments?: SupportMessageAttachmentDto[]) {
+    if (!attachments || attachments.length === 0) {
+      return [];
+    }
+
+    if (attachments.length > SupportService.MAX_MESSAGE_ATTACHMENTS) {
+      throw new BadRequestException(
+        `A message can include up to ${SupportService.MAX_MESSAGE_ATTACHMENTS} attachments`
+      );
+    }
+
+    return attachments.map((attachment) => {
+      const fileKey = attachment.fileKey.trim();
+      const fileUrl = attachment.fileUrl.trim();
+      const fileName = attachment.fileName?.trim() || undefined;
+      const contentType = attachment.contentType?.trim().toLowerCase() || undefined;
+
+      if (!fileKey || !fileUrl) {
+        throw new BadRequestException('Attachment file metadata is required');
+      }
+
+      if (contentType && !contentType.startsWith('image/')) {
+        throw new BadRequestException('Only image attachments are supported in support chat');
+      }
+
+      return {
+        fileKey,
+        fileUrl,
+        fileName,
+        contentType,
+        fileSizeBytes: attachment.fileSizeBytes
+      } satisfies Prisma.SupportTicketMessageAttachmentCreateWithoutMessageInput;
+    });
+  }
+
+  private async getUserTicketOrThrow(ticketId: string, userId: string) {
+    const requester = await this.getRequester(userId);
+
+    const ticket = await this.prisma.supportTicket.findUnique({
+      where: { id: ticketId },
+      select: {
+        id: true,
+        requesterUserId: true,
+        status: true
+      }
+    });
+
+    if (!ticket) {
+      throw new NotFoundException('Support ticket not found');
+    }
+
+    if (ticket.requesterUserId !== requester.id) {
+      throw new ForbiddenException('You do not have access to this support ticket');
+    }
+
+    return { requester, ticket };
   }
 
   private async ensureOrderAccess(input: {
@@ -145,6 +334,11 @@ export class SupportService {
           createdAt: 'asc' as const
         },
         include: {
+          attachments: {
+            orderBy: {
+              createdAt: 'asc' as const
+            }
+          },
           senderUser: {
             select: {
               id: true,
@@ -161,6 +355,8 @@ export class SupportService {
   async createTicket(payload: CreateSupportTicketDto) {
     const requester = await this.getRequester(payload.userId);
     const requesterDriverId = requester.driverProfile?.id;
+    const messageAttachments = this.normalizeAttachmentPayload(payload.attachments);
+    const descriptionMessage = payload.description.trim();
 
     let orderId = payload.orderId?.trim() || undefined;
     let tripId = payload.tripId?.trim() || undefined;
@@ -192,6 +388,7 @@ export class SupportService {
     }
 
     const messageType = requester.role === UserRole.ADMIN ? SupportMessageSenderType.ADMIN : SupportMessageSenderType.USER;
+    const descriptionTranslation = await this.translateTextForSupport(descriptionMessage);
 
     return this.prisma.supportTicket.create({
       data: {
@@ -200,12 +397,25 @@ export class SupportService {
         orderId,
         tripId,
         subject: payload.subject.trim(),
-        description: payload.description.trim(),
+        description: descriptionMessage,
+        descriptionSourceLanguage: descriptionTranslation.sourceLanguage,
+        descriptionTranslatedEnglish: descriptionTranslation.translatedEnglish,
+        descriptionTranslationProvider: descriptionTranslation.translationProvider,
         messages: {
           create: {
             senderType: messageType,
             senderUserId: requester.id,
-            message: payload.description.trim()
+            message: descriptionMessage,
+            sourceLanguage: descriptionTranslation.sourceLanguage,
+            translatedEnglish: descriptionTranslation.translatedEnglish,
+            translationProvider: descriptionTranslation.translationProvider,
+            ...(messageAttachments.length > 0
+              ? {
+                  attachments: {
+                    create: messageAttachments
+                  }
+                }
+              : {})
           }
         }
       },
@@ -245,25 +455,62 @@ export class SupportService {
     return ticket;
   }
 
-  async addUserMessage(ticketId: string, payload: AddSupportTicketMessageDto) {
-    const requester = await this.getRequester(payload.userId);
+  async generateMessageAttachmentUploadUrl(
+    ticketId: string,
+    payload: GenerateSupportMessageUploadUrlDto
+  ) {
+    const { requester, ticket } = await this.getUserTicketOrThrow(ticketId, payload.userId);
 
-    const ticket = await this.prisma.supportTicket.findUnique({
-      where: { id: ticketId },
-      select: {
-        id: true,
-        requesterUserId: true,
-        status: true
+    const normalizedContentType = payload.contentType?.trim().toLowerCase() || 'image/jpeg';
+    if (!normalizedContentType.startsWith('image/')) {
+      throw new BadRequestException('Support attachment must be an image');
+    }
+
+    const safeFileName = this.buildSafeFileName(payload.fileName);
+    const fileKey = `support/${ticket.id}/${requester.id}/msg-${Date.now()}-${safeFileName}`;
+    const endpoint = (this.configService.get<string>('s3.endpoint') ?? '').trim();
+    const accessKeyId = (this.configService.get<string>('s3.accessKeyId') ?? '').trim();
+    const secretAccessKey = (this.configService.get<string>('s3.secretAccessKey') ?? '').trim();
+    const bucket = (this.configService.get<string>('s3.bucket') ?? '').trim();
+    const region = this.configService.get<string>('s3.region') ?? 'auto';
+    const signedUpload = await buildS3UploadUrl(
+      {
+        endpoint,
+        region,
+        bucket,
+        accessKeyId,
+        secretAccessKey
+      },
+      {
+        fileKey,
+        contentType: normalizedContentType
       }
-    });
+    );
 
-    if (!ticket) {
-      throw new NotFoundException('Support ticket not found');
+    if (!signedUpload) {
+      return {
+        fileKey,
+        uploadUrl: `mock://upload/${fileKey}`,
+        fileUrl: `https://mock-storage.local/${fileKey}`,
+        contentType: normalizedContentType,
+        mode: 'mock-storage'
+      };
     }
 
-    if (ticket.requesterUserId !== requester.id) {
-      throw new ForbiddenException('You do not have access to this support ticket');
-    }
+    return {
+      fileKey,
+      uploadUrl: signedUpload.uploadUrl,
+      fileUrl: signedUpload.fileUrl,
+      contentType: normalizedContentType,
+      mode: signedUpload.mode
+    };
+  }
+
+  async addUserMessage(ticketId: string, payload: AddSupportTicketMessageDto) {
+    const { requester, ticket } = await this.getUserTicketOrThrow(ticketId, payload.userId);
+    const attachments = this.normalizeAttachmentPayload(payload.attachments);
+    const messageText = payload.message.trim();
+    const messageTranslation = await this.translateTextForSupport(messageText);
 
     const nextStatus =
       ticket.status === SupportTicketStatus.RESOLVED ||
@@ -277,7 +524,17 @@ export class SupportService {
           ticketId: ticket.id,
           senderType: SupportMessageSenderType.USER,
           senderUserId: requester.id,
-          message: payload.message.trim()
+          message: messageText,
+          sourceLanguage: messageTranslation.sourceLanguage,
+          translatedEnglish: messageTranslation.translatedEnglish,
+          translationProvider: messageTranslation.translationProvider,
+          ...(attachments.length > 0
+            ? {
+                attachments: {
+                  create: attachments
+                }
+              }
+            : {})
         }
       }),
       this.prisma.supportTicket.update({
@@ -307,8 +564,19 @@ export class SupportService {
             OR: [
               { subject: { contains: search, mode: 'insensitive' } },
               { description: { contains: search, mode: 'insensitive' } },
+              { descriptionTranslatedEnglish: { contains: search, mode: 'insensitive' } },
               { requesterUser: { name: { contains: search, mode: 'insensitive' } } },
               { requesterUser: { phone: { contains: search } } },
+              {
+                messages: {
+                  some: {
+                    OR: [
+                      { message: { contains: search, mode: 'insensitive' } },
+                      { translatedEnglish: { contains: search, mode: 'insensitive' } }
+                    ]
+                  }
+                }
+              },
               { orderId: search },
               { tripId: search }
             ]
@@ -348,6 +616,11 @@ export class SupportService {
           },
           take: 1,
           include: {
+            attachments: {
+              orderBy: {
+                createdAt: 'asc'
+              }
+            },
             senderUser: {
               select: {
                 id: true,

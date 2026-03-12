@@ -20,6 +20,8 @@ import { RedisService } from '../../common/redis/redis.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RealtimeService } from '../realtime/realtime.service';
 
+const MAX_INTRA_CITY_DISTANCE_KM = 35;
+
 @Injectable()
 export class OrdersService {
   constructor(
@@ -51,12 +53,21 @@ export class OrdersService {
     return earthRadiusKm * c;
   }
 
+  private assertIntraCityDistance(distanceKm: number) {
+    if (distanceKm > MAX_INTRA_CITY_DISTANCE_KM) {
+      throw new BadRequestException(
+        'City-to-city deliveries are coming soon. Please choose pickup and drop within city limits.'
+      );
+    }
+  }
+
   async estimate(payload: EstimateOrderDto) {
     const vehicleTypes: VehicleType[] = payload.vehicleType
       ? [payload.vehicleType]
       : [VehicleType.THREE_WHEELER, VehicleType.MINI_TRUCK, VehicleType.TRUCK];
 
     const distanceKm = this.computeDistanceKm(payload.pickup, payload.drop);
+    this.assertIntraCityDistance(distanceKm);
     const insuranceSelected = payload.insuranceSelected ?? InsurancePlan.NONE;
     const goodsValue = payload.goodsValue ?? 10000;
 
@@ -136,6 +147,7 @@ export class OrdersService {
 
     const insurancePlan = payload.insuranceSelected ?? InsurancePlan.NONE;
     const distanceKm = this.computeDistanceKm(payload.pickup, payload.drop);
+    this.assertIntraCityDistance(distanceKm);
     const scheduledAt = payload.scheduledAt ? new Date(payload.scheduledAt) : null;
     const isScheduledFuture = Boolean(
       scheduledAt && scheduledAt.getTime() > Date.now() + 5 * 60 * 1000
@@ -200,7 +212,18 @@ export class OrdersService {
         createdAt: 'desc'
       },
       include: {
-        trip: true,
+        trip: {
+          include: {
+            deliveryProof: {
+              select: {
+                id: true,
+                receiverName: true,
+                photoUrl: true,
+                createdAt: true
+              }
+            }
+          }
+        },
         payment: true
       }
     });
@@ -269,7 +292,15 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        trip: true,
+        trip: {
+          include: {
+            deliveryProof: {
+              select: {
+                createdAt: true
+              }
+            }
+          }
+        },
         payment: true
       }
     });
@@ -321,6 +352,14 @@ export class OrdersService {
           key: 'DELIVERED',
           status: 'DELIVERED',
           timestamp: order.trip.deliveryTime
+        });
+      }
+
+      if (order.trip.deliveryProof?.createdAt) {
+        timeline.push({
+          key: 'DELIVERY_PROOF_CAPTURED',
+          status: 'DELIVERY_PROOF_CAPTURED',
+          timestamp: order.trip.deliveryProof.createdAt
         });
       }
     }

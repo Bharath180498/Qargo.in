@@ -24,6 +24,7 @@ interface TicketListRow {
   messages: Array<{
     id: string;
     message: string;
+    translatedEnglish?: string | null;
     createdAt: string;
   }>;
 }
@@ -33,6 +34,9 @@ interface TicketDetail {
   subject: string;
   description: string;
   status: SupportTicketStatus;
+  descriptionSourceLanguage?: string | null;
+  descriptionTranslatedEnglish?: string | null;
+  descriptionTranslationProvider?: string | null;
   requesterRole: UserRole;
   createdAt: string;
   updatedAt: string;
@@ -54,7 +58,17 @@ interface TicketDetail {
     id: string;
     message: string;
     senderType: 'USER' | 'ADMIN' | 'SYSTEM';
+    sourceLanguage?: string | null;
+    translatedEnglish?: string | null;
+    translationProvider?: string | null;
     createdAt: string;
+    attachments?: Array<{
+      id: string;
+      fileUrl: string;
+      fileName?: string | null;
+      contentType?: string | null;
+      fileSizeBytes?: number | null;
+    }>;
     senderUser?: {
       id: string;
       name: string;
@@ -62,6 +76,13 @@ interface TicketDetail {
       role: UserRole;
     } | null;
   }>;
+}
+
+function hasDifferentTranslation(original: string, translated?: string | null) {
+  if (!translated) {
+    return false;
+  }
+  return original.trim().toLowerCase() !== translated.trim().toLowerCase();
 }
 
 const STATUS_OPTIONS: Array<{ label: string; value: SupportTicketStatus | 'ALL' }> = [
@@ -337,21 +358,86 @@ export default function SupportInboxPage() {
               <section className="flex-1 space-y-3 overflow-auto px-4 py-4">
                 <article className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2.5">
                   <p className="font-manrope text-xs uppercase tracking-wide text-slate-500">Ticket Description</p>
-                  <p className="mt-1 whitespace-pre-wrap font-manrope text-sm text-slate-200">{selectedTicket.description}</p>
+                  {hasDifferentTranslation(
+                    selectedTicket.description,
+                    selectedTicket.descriptionTranslatedEnglish
+                  ) ? (
+                    <>
+                      <p className="mt-2 font-manrope text-[11px] uppercase tracking-wide text-cyan-300">
+                        Support View (English)
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap font-manrope text-sm text-slate-100">
+                        {selectedTicket.descriptionTranslatedEnglish}
+                      </p>
+                      <p className="mt-3 font-manrope text-[11px] uppercase tracking-wide text-slate-500">
+                        Original ({selectedTicket.descriptionSourceLanguage ?? 'auto'})
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap font-manrope text-sm text-slate-300">
+                        {selectedTicket.description}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="mt-1 whitespace-pre-wrap font-manrope text-sm text-slate-200">
+                      {selectedTicket.description}
+                    </p>
+                  )}
                 </article>
 
-                {selectedTicket.messages.map((message) => (
-                  <article key={message.id} className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-manrope text-xs uppercase tracking-wide text-slate-500">
-                        {message.senderType}
-                        {message.senderUser?.name ? ` • ${message.senderUser.name}` : ''}
-                      </p>
-                      <p className="font-manrope text-xs text-slate-500">{formatDate(message.createdAt)}</p>
-                    </div>
-                    <p className="mt-2 whitespace-pre-wrap font-manrope text-sm text-slate-200">{message.message}</p>
-                  </article>
-                ))}
+                {selectedTicket.messages.map((message) => {
+                  const showTranslation =
+                    message.senderType === 'USER' &&
+                    hasDifferentTranslation(message.message, message.translatedEnglish);
+
+                  return (
+                    <article key={message.id} className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-manrope text-xs uppercase tracking-wide text-slate-500">
+                          {message.senderType}
+                          {message.senderUser?.name ? ` • ${message.senderUser.name}` : ''}
+                        </p>
+                        <p className="font-manrope text-xs text-slate-500">{formatDate(message.createdAt)}</p>
+                      </div>
+
+                      {showTranslation ? (
+                        <>
+                          <p className="mt-2 font-manrope text-[11px] uppercase tracking-wide text-cyan-300">
+                            Support View (English)
+                          </p>
+                          <p className="mt-1 whitespace-pre-wrap font-manrope text-sm text-slate-100">
+                            {message.translatedEnglish}
+                          </p>
+                          <p className="mt-3 font-manrope text-[11px] uppercase tracking-wide text-slate-500">
+                            Original ({message.sourceLanguage ?? 'auto'})
+                          </p>
+                          <p className="mt-1 whitespace-pre-wrap font-manrope text-sm text-slate-300">
+                            {message.message}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="mt-2 whitespace-pre-wrap font-manrope text-sm text-slate-200">{message.message}</p>
+                      )}
+
+                      {(message.attachments?.length ?? 0) > 0 ? (
+                        <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3">
+                          {message.attachments?.map((attachment) => (
+                            <a
+                              key={attachment.id}
+                              href={attachment.fileUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="overflow-hidden rounded-md border border-slate-700 bg-slate-900/70"
+                            >
+                              <img src={attachment.fileUrl} alt={attachment.fileName ?? 'Support attachment'} className="h-28 w-full object-cover" />
+                              <p className="truncate px-2 py-1 font-manrope text-[11px] text-slate-400">
+                                {attachment.fileName ?? 'Image'}
+                              </p>
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
 
                 {selectedTicket.messages.length === 0 ? (
                   <p className="font-manrope text-sm text-slate-500">No messages yet.</p>

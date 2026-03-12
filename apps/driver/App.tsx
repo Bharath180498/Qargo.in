@@ -5,11 +5,13 @@ import {
   Manrope_500Medium,
   Manrope_700Bold
 } from '@expo-google-fonts/manrope';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { AuthNavigator } from './src/navigation/AuthNavigator';
 import { DriverTabs } from './src/navigation/DriverTabs';
 import { OnboardingNavigator } from './src/navigation/OnboardingNavigator';
+import { ensureDriverPushRegistered, unregisterDriverPushToken } from './src/services/pushNotifications';
+import { useDriverAppStore } from './src/store/useDriverAppStore';
 import { useDriverSessionStore } from './src/store/useDriverSessionStore';
 import { colors } from './src/theme';
 
@@ -34,6 +36,8 @@ export default function App() {
   const onboardingStatus = useDriverSessionStore((state) => state.onboardingStatus);
   const loading = useDriverSessionStore((state) => state.loading);
   const refreshOnboardingStatus = useDriverSessionStore((state) => state.refreshOnboardingStatus);
+  const driverProfileId = useDriverAppStore((state) => state.driverProfileId);
+  const lastRegisteredDriverIdRef = useRef<string | undefined>(undefined);
 
   const [soraLoaded] = useSoraFonts({ Sora_700Bold });
   const [manropeLoaded] = useManropeFonts({ Manrope_500Medium, Manrope_700Bold });
@@ -43,6 +47,20 @@ export default function App() {
       void refreshOnboardingStatus();
     }
   }, [refreshOnboardingStatus, token, user?.id]);
+
+  useEffect(() => {
+    if (token && driverProfileId) {
+      lastRegisteredDriverIdRef.current = driverProfileId;
+      void ensureDriverPushRegistered(driverProfileId);
+      return;
+    }
+
+    if (!token && lastRegisteredDriverIdRef.current) {
+      const previousDriverId = lastRegisteredDriverIdRef.current;
+      lastRegisteredDriverIdRef.current = undefined;
+      void unregisterDriverPushToken(previousDriverId);
+    }
+  }, [token, driverProfileId]);
 
   const blockForOnboardingRefresh = Boolean(token && loading && !onboardingStatus);
 

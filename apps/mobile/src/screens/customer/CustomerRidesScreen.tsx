@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import api from '../../services/api';
 import { isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
@@ -8,6 +8,7 @@ import type { RootStackParamList } from '../../types/navigation';
 import { CustomerSideDrawer, type DrawerRoute } from '../../components/CustomerSideDrawer';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerRides'>;
+type RideFilter = 'ALL' | 'ONGOING' | 'DELIVERED' | 'CANCELLED';
 
 interface OrderRow {
   id: string;
@@ -17,6 +18,14 @@ interface OrderRow {
   finalPrice?: number;
   estimatedPrice?: number;
   createdAt: string;
+  trip?: {
+    deliveryProof?: {
+      id?: string;
+    } | null;
+  } | null;
+  payment?: {
+    status?: string | null;
+  } | null;
 }
 
 function readableStatus(status: string) {
@@ -38,6 +47,8 @@ export function CustomerRidesScreen({ navigation }: Props) {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [rideFilter, setRideFilter] = useState<RideFilter>('ALL');
 
   const loadOrders = useCallback(async () => {
     if (!user?.id) {
@@ -62,8 +73,39 @@ export function CustomerRidesScreen({ navigation }: Props) {
     void loadOrders();
   }, [loadOrders]);
 
-  const ongoing = useMemo(() => orders.filter((item) => isOngoingOrderStatus(item.status)), [orders]);
-  const history = useMemo(() => orders.filter((item) => !isOngoingOrderStatus(item.status)), [orders]);
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredOrders = useMemo(() => {
+    return orders.filter((order) => {
+      const matchesFilter =
+        rideFilter === 'ALL'
+          ? true
+          : rideFilter === 'ONGOING'
+            ? isOngoingOrderStatus(order.status)
+            : order.status === rideFilter;
+
+      if (!matchesFilter) {
+        return false;
+      }
+
+      if (!normalizedQuery) {
+        return true;
+      }
+
+      const searchable = [order.id, order.pickupAddress, order.dropAddress, order.status, readableStatus(order.status)]
+        .join(' ')
+        .toLowerCase();
+      return searchable.includes(normalizedQuery);
+    });
+  }, [normalizedQuery, orders, rideFilter]);
+
+  const ongoing = useMemo(
+    () => filteredOrders.filter((item) => isOngoingOrderStatus(item.status)),
+    [filteredOrders]
+  );
+  const history = useMemo(
+    () => filteredOrders.filter((item) => !isOngoingOrderStatus(item.status)),
+    [filteredOrders]
+  );
 
   const openRideDetails = (order: OrderRow) => {
     navigation.navigate('CustomerRideDetails', { orderId: order.id });
@@ -95,10 +137,44 @@ export function CustomerRidesScreen({ navigation }: Props) {
           bounces={false}
           directionalLockEnabled
         >
+          <View style={styles.filterCard}>
+            <View style={styles.searchRow}>
+              <TextInput
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search by ride ID, pickup, drop or status"
+                placeholderTextColor="#94A3B8"
+                style={styles.searchInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {searchQuery.trim() ? (
+                <Pressable style={styles.clearSearchButton} onPress={() => setSearchQuery('')}>
+                  <Text style={styles.clearSearchButtonText}>Clear</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChipsRow}>
+              {(['ALL', 'ONGOING', 'DELIVERED', 'CANCELLED'] as RideFilter[]).map((filterOption) => (
+                <Pressable
+                  key={filterOption}
+                  style={[styles.filterChip, rideFilter === filterOption && styles.filterChipActive]}
+                  onPress={() => setRideFilter(filterOption)}
+                >
+                  <Text style={[styles.filterChipText, rideFilter === filterOption && styles.filterChipTextActive]}>
+                    {filterOption === 'ALL' ? 'All rides' : readableStatus(filterOption)}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Ongoing</Text>
             {ongoing.length === 0 ? (
-              <Text style={styles.emptyCopy}>No ongoing trips right now.</Text>
+              <Text style={styles.emptyCopy}>
+                {normalizedQuery || rideFilter !== 'ALL' ? 'No ongoing rides match the current filter.' : 'No ongoing trips right now.'}
+              </Text>
             ) : (
               ongoing.map((order) => (
                 <Pressable key={order.id} style={styles.card} onPress={() => openRideDetails(order)}>
@@ -118,7 +194,9 @@ export function CustomerRidesScreen({ navigation }: Props) {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Completed & Cancelled</Text>
             {history.length === 0 ? (
-              <Text style={styles.emptyCopy}>No previous rides yet.</Text>
+              <Text style={styles.emptyCopy}>
+                {normalizedQuery || rideFilter !== 'ALL' ? 'No completed rides match the current filter.' : 'No previous rides yet.'}
+              </Text>
             ) : (
               history.map((order) => (
                 <Pressable key={order.id} style={styles.card} onPress={() => openRideDetails(order)}>
@@ -128,6 +206,12 @@ export function CustomerRidesScreen({ navigation }: Props) {
                   </View>
                   <Text style={styles.cardLine}>From: {order.pickupAddress}</Text>
                   <Text style={styles.cardLine}>To: {order.dropAddress}</Text>
+                  {order.status === 'DELIVERED' && String(order.payment?.status ?? '').toUpperCase() !== 'CAPTURED' ? (
+                    <Text style={styles.paymentPendingBadge}>Payment pending • Tap to pay</Text>
+                  ) : null}
+                  {order.status === 'DELIVERED' && order.trip?.deliveryProof?.id ? (
+                    <Text style={styles.proofBadge}>Proof captured</Text>
+                  ) : null}
                   <Text style={styles.cardMeta}>{readableDate(order.createdAt)}</Text>
                   <Text style={styles.cardAction}>Tap for full bill & driver details</Text>
                 </Pressable>
@@ -210,6 +294,68 @@ const styles = StyleSheet.create({
   section: {
     gap: 10
   },
+  filterCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    backgroundColor: '#F8FAFF',
+    padding: 10,
+    gap: 9
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  },
+  searchInput: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#FFFFFF',
+    color: '#0F172A',
+    fontFamily: 'Manrope_500Medium',
+    fontSize: 13,
+    paddingHorizontal: 10,
+    paddingVertical: 9
+  },
+  clearSearchButton: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 10,
+    paddingVertical: 8
+  },
+  clearSearchButtonText: {
+    fontFamily: 'Manrope_700Bold',
+    color: '#1D4ED8',
+    fontSize: 12
+  },
+  filterChipsRow: {
+    gap: 8,
+    paddingRight: 4
+  },
+  filterChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 11,
+    paddingVertical: 6
+  },
+  filterChipActive: {
+    borderColor: '#1D4ED8',
+    backgroundColor: '#DBEAFE'
+  },
+  filterChipText: {
+    color: '#334155',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  filterChipTextActive: {
+    color: '#1D4ED8'
+  },
   sectionTitle: {
     fontFamily: 'Sora_700Bold',
     fontSize: 17,
@@ -253,6 +399,32 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_500Medium',
     color: '#64748B',
     fontSize: 12
+  },
+  proofBadge: {
+    marginTop: 4,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#6EE7B7',
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    fontFamily: 'Manrope_700Bold',
+    color: '#047857',
+    fontSize: 11
+  },
+  paymentPendingBadge: {
+    marginTop: 4,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    fontFamily: 'Manrope_700Bold',
+    color: '#1D4ED8',
+    fontSize: 11
   },
   cardAction: {
     marginTop: 4,

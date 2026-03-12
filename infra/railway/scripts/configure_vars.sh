@@ -40,6 +40,15 @@ INSURANCE_API_URL_INPUT="${INSURANCE_API_URL:-}"
 INSURANCE_API_KEY_INPUT="${INSURANCE_API_KEY:-}"
 ADMIN_PASSCODE_INPUT="${ADMIN_PASSCODE:-change-me-admin-passcode}"
 SUPPORT_PHONE_INPUT="${SUPPORT_PHONE:-9844259899}"
+SUPPORT_TRANSLATION_ENABLED_INPUT="${SUPPORT_TRANSLATION_ENABLED:-false}"
+SUPPORT_TRANSLATION_TARGET_LANGUAGE_INPUT="${SUPPORT_TRANSLATION_TARGET_LANGUAGE:-en}"
+GOOGLE_TRANSLATE_API_KEY_INPUT="${GOOGLE_TRANSLATE_API_KEY:-}"
+GOOGLE_TRANSLATE_API_URL_INPUT="${GOOGLE_TRANSLATE_API_URL:-https://translation.googleapis.com/language/translate/v2}"
+S3_ENDPOINT_INPUT="${S3_ENDPOINT:-}"
+S3_REGION_INPUT="${S3_REGION:-ap-south-1}"
+S3_BUCKET_INPUT="${S3_BUCKET:-}"
+S3_ACCESS_KEY_ID_INPUT="${S3_ACCESS_KEY_ID:-}"
+S3_SECRET_ACCESS_KEY_INPUT="${S3_SECRET_ACCESS_KEY:-}"
 SKIP_ADMIN="false"
 
 usage() {
@@ -54,7 +63,7 @@ Usage:
     [--redis-service Redis] \
     [--route-provider mock|google] \
     [--kyc-provider mock|idfy|cashfree|quickekyc] \
-    [--push-provider mock|fcm] \
+    [--push-provider mock|expo|fcm] \
     [--otp-provider mock|twilio] \
     [--google-maps-api-key your-key] \
     [--idfy-api-key your-key] \
@@ -86,6 +95,15 @@ Usage:
     [--insurance-api-key your-key] \
     [--admin-passcode launch-admin-passcode] \
     [--support-phone 9844259899] \
+    [--support-translation-enabled true|false] \
+    [--support-translation-target-language en] \
+    [--google-translate-api-key your-key] \
+    [--google-translate-api-url https://translation.googleapis.com/language/translate/v2] \
+    [--s3-endpoint https://s3.ap-south-1.amazonaws.com] \
+    [--s3-region ap-south-1] \
+    [--s3-bucket qargo-prod-assets] \
+    [--s3-access-key-id AKIA...] \
+    [--s3-secret-access-key ...] \
     [--skip-admin] \
     [--jwt-secret your-secret]
 
@@ -311,6 +329,42 @@ while [[ $# -gt 0 ]]; do
       SUPPORT_PHONE_INPUT="$2"
       shift 2
       ;;
+    --support-translation-enabled)
+      SUPPORT_TRANSLATION_ENABLED_INPUT="$2"
+      shift 2
+      ;;
+    --support-translation-target-language)
+      SUPPORT_TRANSLATION_TARGET_LANGUAGE_INPUT="$2"
+      shift 2
+      ;;
+    --google-translate-api-key)
+      GOOGLE_TRANSLATE_API_KEY_INPUT="$2"
+      shift 2
+      ;;
+    --google-translate-api-url)
+      GOOGLE_TRANSLATE_API_URL_INPUT="$2"
+      shift 2
+      ;;
+    --s3-endpoint)
+      S3_ENDPOINT_INPUT="$2"
+      shift 2
+      ;;
+    --s3-region)
+      S3_REGION_INPUT="$2"
+      shift 2
+      ;;
+    --s3-bucket)
+      S3_BUCKET_INPUT="$2"
+      shift 2
+      ;;
+    --s3-access-key-id)
+      S3_ACCESS_KEY_ID_INPUT="$2"
+      shift 2
+      ;;
+    --s3-secret-access-key)
+      S3_SECRET_ACCESS_KEY_INPUT="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -377,8 +431,9 @@ set_var_if_real() {
 
 validate_choice "ROUTE_PROVIDER" "$ROUTE_PROVIDER_VALUE" "mock" "google"
 validate_choice "KYC_PROVIDER" "$KYC_PROVIDER_VALUE" "mock" "idfy" "cashfree" "quickekyc"
-validate_choice "PUSH_PROVIDER" "$PUSH_PROVIDER_VALUE" "mock" "fcm"
+validate_choice "PUSH_PROVIDER" "$PUSH_PROVIDER_VALUE" "mock" "expo" "fcm"
 validate_choice "OTP_PROVIDER" "$OTP_PROVIDER_VALUE" "mock" "twilio"
+validate_choice "SUPPORT_TRANSLATION_ENABLED" "$SUPPORT_TRANSLATION_ENABLED_INPUT" "true" "false"
 
 if [[ "$ROUTE_PROVIDER_VALUE" == "google" ]]; then
   require_real_value "GOOGLE_MAPS_API_KEY" "$GOOGLE_MAPS_API_KEY_INPUT"
@@ -411,6 +466,32 @@ if [[ "$OTP_PROVIDER_VALUE" == "twilio" ]]; then
   require_real_value "TWILIO_FROM_NUMBER" "$TWILIO_FROM_NUMBER_INPUT"
 fi
 
+if [[ "$SUPPORT_TRANSLATION_ENABLED_INPUT" == "true" ]]; then
+  require_real_value "GOOGLE_TRANSLATE_API_KEY" "$GOOGLE_TRANSLATE_API_KEY_INPUT"
+fi
+
+s3_settings_supplied=0
+if ! is_placeholder "$S3_ENDPOINT_INPUT"; then
+  s3_settings_supplied=1
+fi
+if ! is_placeholder "$S3_BUCKET_INPUT"; then
+  s3_settings_supplied=1
+fi
+if ! is_placeholder "$S3_ACCESS_KEY_ID_INPUT"; then
+  s3_settings_supplied=1
+fi
+if ! is_placeholder "$S3_SECRET_ACCESS_KEY_INPUT"; then
+  s3_settings_supplied=1
+fi
+
+if [[ "$s3_settings_supplied" == "1" ]]; then
+  require_real_value "S3_ENDPOINT" "$S3_ENDPOINT_INPUT"
+  require_real_value "S3_BUCKET" "$S3_BUCKET_INPUT"
+  require_real_value "S3_ACCESS_KEY_ID" "$S3_ACCESS_KEY_ID_INPUT"
+  require_real_value "S3_SECRET_ACCESS_KEY" "$S3_SECRET_ACCESS_KEY_INPUT"
+  require_real_value "S3_REGION" "$S3_REGION_INPUT"
+fi
+
 if is_placeholder "$ADMIN_PASSCODE_INPUT"; then
   echo "ADMIN_PASSCODE is required and cannot be empty or placeholder." >&2
   exit 1
@@ -427,6 +508,9 @@ set_var "$BACKEND_SERVICE" "JWT_SECRET=$JWT_SECRET_INPUT"
 set_var "$BACKEND_SERVICE" "JWT_EXPIRES_IN=7d"
 set_var "$BACKEND_SERVICE" "ADMIN_PASSCODE=$ADMIN_PASSCODE_INPUT"
 set_var "$BACKEND_SERVICE" "SUPPORT_PHONE=$SUPPORT_PHONE_INPUT"
+set_var "$BACKEND_SERVICE" "SUPPORT_TRANSLATION_ENABLED=$SUPPORT_TRANSLATION_ENABLED_INPUT"
+set_var "$BACKEND_SERVICE" "SUPPORT_TRANSLATION_TARGET_LANGUAGE=$SUPPORT_TRANSLATION_TARGET_LANGUAGE_INPUT"
+set_var "$BACKEND_SERVICE" "GOOGLE_TRANSLATE_API_URL=$GOOGLE_TRANSLATE_API_URL_INPUT"
 set_var "$BACKEND_SERVICE" "NODE_ENV=production"
 set_var "$BACKEND_SERVICE" "AUTH_MODE=otp"
 set_var "$BACKEND_SERVICE" "OTP_PROVIDER=$OTP_PROVIDER_VALUE"
@@ -439,6 +523,7 @@ set_var "$BACKEND_SERVICE" "DISPATCH_RADIUS_KM=8"
 set_var "$BACKEND_SERVICE" "WAITING_RATE_PER_MINUTE=3"
 set_var "$BACKEND_SERVICE" "BASE_FARE_PER_KM=14"
 set_var_if_real "$BACKEND_SERVICE" "GOOGLE_MAPS_API_KEY" "$GOOGLE_MAPS_API_KEY_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "GOOGLE_TRANSLATE_API_KEY" "$GOOGLE_TRANSLATE_API_KEY_INPUT"
 set_var_if_real "$BACKEND_SERVICE" "IDFY_API_KEY" "$IDFY_API_KEY_INPUT"
 set_var_if_real "$BACKEND_SERVICE" "IDFY_API_URL" "$IDFY_API_URL_INPUT"
 set_var_if_real "$BACKEND_SERVICE" "IDFY_ACCOUNT_ID" "$IDFY_ACCOUNT_ID_INPUT"
@@ -468,6 +553,11 @@ set_var "$BACKEND_SERVICE" "EWAY_BILL_API_URL=https://sandbox.ewaybill.example"
 set_var_if_real "$BACKEND_SERVICE" "EWAY_BILL_API_KEY" "$EWAY_BILL_API_KEY_INPUT"
 set_var_if_real "$BACKEND_SERVICE" "INSURANCE_API_URL" "$INSURANCE_API_URL_INPUT"
 set_var_if_real "$BACKEND_SERVICE" "INSURANCE_API_KEY" "$INSURANCE_API_KEY_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "S3_ENDPOINT" "$S3_ENDPOINT_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "S3_REGION" "$S3_REGION_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "S3_BUCKET" "$S3_BUCKET_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "S3_ACCESS_KEY_ID" "$S3_ACCESS_KEY_ID_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "S3_SECRET_ACCESS_KEY" "$S3_SECRET_ACCESS_KEY_INPUT"
 
 if [[ "$SKIP_ADMIN" == "false" ]]; then
   echo "Setting admin variables on service: $ADMIN_SERVICE"

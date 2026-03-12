@@ -16,6 +16,7 @@ import { KycVerificationProvider } from './providers/kyc-verification.provider';
 import { MockIdfyProvider } from './providers/mock-idfy.provider';
 import { CashfreeProvider } from './providers/cashfree.provider';
 import { QuickeKycProvider } from './providers/quickekyc.provider';
+import { buildS3UploadUrl } from '../../common/utils/s3-upload.util';
 
 @Injectable()
 export class KycService {
@@ -45,11 +46,25 @@ export class KycService {
 
   async generateUploadUrl(payload: GenerateUploadUrlDto) {
     const fileKey = `kyc/${payload.userId}/${payload.type.toLowerCase()}-${Date.now()}-${payload.fileName}`;
-    const endpoint = this.configService.get<string>('s3.endpoint') ?? '';
-    const bucket = this.configService.get<string>('s3.bucket') ?? '';
+    const endpoint = (this.configService.get<string>('s3.endpoint') ?? '').trim();
+    const accessKeyId = (this.configService.get<string>('s3.accessKeyId') ?? '').trim();
+    const secretAccessKey = (this.configService.get<string>('s3.secretAccessKey') ?? '').trim();
+    const bucket = (this.configService.get<string>('s3.bucket') ?? '').trim();
     const region = this.configService.get<string>('s3.region') ?? 'auto';
+    const signedUpload = await buildS3UploadUrl(
+      {
+        endpoint,
+        region,
+        bucket,
+        accessKeyId,
+        secretAccessKey
+      },
+      {
+        fileKey
+      }
+    );
 
-    if (!endpoint || !bucket) {
+    if (!signedUpload) {
       return {
         fileKey,
         uploadUrl: `mock://upload/${fileKey}`,
@@ -58,12 +73,11 @@ export class KycService {
       };
     }
 
-    const base = endpoint.replace(/\/$/, '');
     return {
       fileKey,
-      uploadUrl: `${base}/${bucket}/${fileKey}?signed=mock-signature`,
-      fileUrl: `${base}/${bucket}/${fileKey}`,
-      mode: `s3-${region}`
+      uploadUrl: signedUpload.uploadUrl,
+      fileUrl: signedUpload.fileUrl,
+      mode: signedUpload.mode
     };
   }
 
@@ -195,6 +209,79 @@ export class KycService {
       },
       orderBy: { createdAt: 'asc' }
     });
+  }
+
+  async reviewDetails(verificationId: string) {
+    const verification = await this.prisma.kycVerification.findUnique({
+      where: { id: verificationId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            email: true,
+            role: true,
+            createdAt: true
+          }
+        },
+        onboarding: true,
+        reviewedByAdmin: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            email: true
+          }
+        }
+      }
+    });
+
+    if (!verification) {
+      throw new NotFoundException('Verification not found');
+    }
+
+    const [documents, verificationHistory, driverProfile] = await Promise.all([
+      this.prisma.kycDocument.findMany({
+        where: { userId: verification.userId },
+        orderBy: { createdAt: 'desc' }
+      }),
+      this.prisma.kycVerification.findMany({
+        where: { userId: verification.userId },
+        include: {
+          reviewedByAdmin: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+              email: true
+            }
+          }
+        },
+        orderBy: { createdAt: 'desc' }
+      }),
+      this.prisma.driverProfile.findUnique({
+        where: { userId: verification.userId },
+        include: {
+          vehicles: true,
+          payoutAccount: true,
+          paymentMethods: {
+            where: { isActive: true },
+            orderBy: [{ isPreferred: 'desc' }, { createdAt: 'desc' }],
+            take: 5
+          }
+        }
+      })
+    ]);
+
+    return {
+      verification,
+      user: verification.user,
+      onboarding: verification.onboarding,
+      documents,
+      verificationHistory,
+      driverProfile
+    };
   }
 
   async approve(verificationId: string, adminUserId: string) {

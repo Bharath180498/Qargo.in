@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Linking,
   Pressable,
   SafeAreaView,
@@ -22,8 +21,14 @@ const METHODS: Array<{
   id: PaymentMethod;
   title: string;
   description: string;
+  requiresAssignedTrip?: boolean;
 }> = [
-  { id: 'UPI_SCAN_PAY', title: 'UPI Scan and Pay', description: 'Fastest in India' },
+  {
+    id: 'UPI_SCAN_PAY',
+    title: 'UPI Scan and Pay',
+    description: 'Fastest in India',
+    requiresAssignedTrip: true
+  },
   { id: 'VISA_5496', title: 'Visa ....5496', description: 'Credit / debit card · +2.5% surcharge' },
   { id: 'MASTERCARD_6802', title: 'Mastercard ....6802', description: 'Credit / debit card · +2.5% surcharge' },
   { id: 'CASH', title: 'Cash at delivery', description: 'Pay driver on completion' }
@@ -36,6 +41,10 @@ interface DriverDirectPaymentProfile {
   upiId?: string;
   upiQrImageUrl?: string;
   paymentMethodId?: string;
+  tripPreferredPaymentMethodId?: string;
+  tripPreferredUpiId?: string;
+  tripPreferredPaymentLabel?: string;
+  tripPreferredUpiQrImageUrl?: string;
   paymentMethods: Array<{
     id: string;
     label?: string;
@@ -47,6 +56,19 @@ interface DriverDirectPaymentProfile {
 
 function normalize(value: unknown) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function parseAmount(value: unknown) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return undefined;
+  }
+  return amount;
+}
+
+function normalizeStatus(value: unknown) {
+  const status = normalize(value);
+  return status ? status.toUpperCase() : undefined;
 }
 
 export function CustomerPaymentScreen({ navigation }: Props) {
@@ -63,30 +85,54 @@ export function CustomerPaymentScreen({ navigation }: Props) {
   });
   const [loadingDriverProfile, setLoadingDriverProfile] = useState(false);
   const [selectedDriverPaymentMethodId, setSelectedDriverPaymentMethodId] = useState<string>();
-  const baseAmount = Number(estimatedPrice ?? 0);
+  const [orderAmount, setOrderAmount] = useState<number>(parseAmount(estimatedPrice) ?? 0);
+  const [orderStatus, setOrderStatus] = useState<string>();
+  const [tripStatus, setTripStatus] = useState<string>();
+  const [paymentStatus, setPaymentStatus] = useState<string>();
+  const baseAmount = orderAmount > 0 ? orderAmount : Number(estimatedPrice ?? 0);
   const isCardMethod = CARD_METHODS.includes(selectedMethod);
   const cardSurchargeAmount = isCardMethod ? Math.round(baseAmount * 0.025 * 100) / 100 : 0;
   const payableAmount = Math.round((baseAmount + cardSurchargeAmount) * 100) / 100;
+  const upiEnabled = Boolean(
+    (tripStatus && tripStatus !== 'CANCELLED') ||
+      orderStatus === 'ASSIGNED' ||
+      orderStatus === 'AT_PICKUP' ||
+      orderStatus === 'LOADING' ||
+      orderStatus === 'IN_TRANSIT' ||
+      orderStatus === 'DELIVERED'
+  );
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadOrderPaymentProfile = async () => {
+  const loadOrderPaymentProfile = useCallback(
+    async (options?: { silent?: boolean }) => {
       if (!orderId) {
         setDriverDirectProfile({ paymentMethods: [] });
         setSelectedDriverPaymentMethodId(undefined);
+        setOrderAmount(parseAmount(estimatedPrice) ?? 0);
+        setOrderStatus(undefined);
+        setTripStatus(undefined);
+        setPaymentStatus(undefined);
         return;
       }
 
-      setLoadingDriverProfile(true);
+      if (!options?.silent) {
+        setLoadingDriverProfile(true);
+      }
+
       try {
         const response = await api.get(`/orders/${orderId}`);
-        if (cancelled) {
-          return;
-        }
-
         const payload = response.data as {
+          status?: string;
+          estimatedPrice?: number | string;
+          finalPrice?: number | string;
+          payment?: {
+            status?: string;
+          };
           trip?: {
+            status?: string;
+            driverPreferredPaymentMethodId?: string;
+            driverPreferredUpiId?: string;
+            driverPreferredPaymentLabel?: string;
+            driverPreferredUpiQrImageUrl?: string;
             driver?: {
               user?: {
                 name?: string;
@@ -105,6 +151,16 @@ export function CustomerPaymentScreen({ navigation }: Props) {
             };
           };
         };
+
+        const tripPreferredPaymentMethodId = normalize(payload.trip?.driverPreferredPaymentMethodId);
+        const tripPreferredUpiId = normalize(payload.trip?.driverPreferredUpiId);
+        const tripPreferredPaymentLabel = normalize(payload.trip?.driverPreferredPaymentLabel);
+        const tripPreferredUpiQrImageUrl = normalize(payload.trip?.driverPreferredUpiQrImageUrl);
+        const resolvedAmount =
+          parseAmount(payload.finalPrice) ??
+          parseAmount(payload.estimatedPrice) ??
+          parseAmount(estimatedPrice) ??
+          0;
 
         const paymentMethods = Array.isArray(payload.trip?.driver?.paymentMethods)
           ? payload.trip?.driver?.paymentMethods
@@ -131,51 +187,94 @@ export function CustomerPaymentScreen({ navigation }: Props) {
             }>
           : [];
 
-        const preferredMethod = paymentMethods.find((method) => method.isPreferred) ?? paymentMethods[0];
+        const tripPreferredMethod = tripPreferredPaymentMethodId
+          ? paymentMethods.find((method) => method.id === tripPreferredPaymentMethodId)
+          : undefined;
+        const preferredMethod =
+          tripPreferredMethod ??
+          paymentMethods.find((method) => method.isPreferred) ??
+          paymentMethods[0];
 
+        setOrderAmount(resolvedAmount);
+        setOrderStatus(normalizeStatus(payload.status));
+        setTripStatus(normalizeStatus(payload.trip?.status));
+        setPaymentStatus(normalizeStatus(payload.payment?.status));
         setDriverDirectProfile({
           name: normalize(payload.trip?.driver?.user?.name),
-          upiId: preferredMethod?.upiId ?? normalize(payload.trip?.driver?.payoutAccount?.upiId),
+          upiId:
+            tripPreferredUpiId ??
+            preferredMethod?.upiId ??
+            normalize(payload.trip?.driver?.payoutAccount?.upiId),
           upiQrImageUrl:
-            preferredMethod?.qrImageUrl ?? normalize(payload.trip?.driver?.payoutAccount?.upiQrImageUrl),
+            tripPreferredUpiQrImageUrl ??
+            preferredMethod?.qrImageUrl ??
+            normalize(payload.trip?.driver?.payoutAccount?.upiQrImageUrl),
           paymentMethodId: preferredMethod?.id,
+          tripPreferredPaymentMethodId,
+          tripPreferredUpiId,
+          tripPreferredPaymentLabel,
+          tripPreferredUpiQrImageUrl,
           paymentMethods
         });
-        setSelectedDriverPaymentMethodId(preferredMethod?.id);
+        setSelectedDriverPaymentMethodId(tripPreferredMethod?.id ?? preferredMethod?.id);
       } catch {
-        if (!cancelled) {
-          setDriverDirectProfile({ paymentMethods: [] });
-          setSelectedDriverPaymentMethodId(undefined);
-        }
+        setDriverDirectProfile({ paymentMethods: [] });
+        setSelectedDriverPaymentMethodId(undefined);
+        setOrderAmount(parseAmount(estimatedPrice) ?? 0);
+        setOrderStatus(undefined);
+        setTripStatus(undefined);
+        setPaymentStatus(undefined);
       } finally {
-        if (!cancelled) {
+        if (!options?.silent) {
           setLoadingDriverProfile(false);
         }
       }
-    };
+    },
+    [estimatedPrice, orderId]
+  );
 
+  useEffect(() => {
     void loadOrderPaymentProfile();
+  }, [loadOrderPaymentProfile]);
+
+  useEffect(() => {
+    if (!orderId) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void loadOrderPaymentProfile({ silent: true });
+    }, 10000);
 
     return () => {
-      cancelled = true;
+      clearInterval(interval);
     };
-  }, [orderId]);
+  }, [loadOrderPaymentProfile, orderId]);
 
   const selectedDriverPaymentMethod = useMemo(() => {
     const methods = driverDirectProfile.paymentMethods;
     if (!methods.length) {
       return undefined;
     }
+    const tripPreferredMethod = driverDirectProfile.tripPreferredPaymentMethodId
+      ? methods.find((method) => method.id === driverDirectProfile.tripPreferredPaymentMethodId)
+      : undefined;
     return (
       methods.find((method) => method.id === selectedDriverPaymentMethodId) ??
+      tripPreferredMethod ??
       methods.find((method) => method.isPreferred) ??
       methods[0]
     );
-  }, [driverDirectProfile.paymentMethods, selectedDriverPaymentMethodId]);
+  }, [
+    driverDirectProfile.paymentMethods,
+    driverDirectProfile.tripPreferredPaymentMethodId,
+    selectedDriverPaymentMethodId
+  ]);
 
-  const resolvedDriverUpiId = selectedDriverPaymentMethod?.upiId ?? driverDirectProfile.upiId;
-  const resolvedDriverUpiQrImageUrl =
-    selectedDriverPaymentMethod?.qrImageUrl ?? driverDirectProfile.upiQrImageUrl;
+  const resolvedDriverUpiId =
+    selectedDriverPaymentMethod?.upiId ??
+    driverDirectProfile.tripPreferredUpiId ??
+    driverDirectProfile.upiId;
   const hasDriverDirectUpi = Boolean(resolvedDriverUpiId);
   const methods = useMemo(() => {
     if (!hasDriverDirectUpi) {
@@ -185,18 +284,24 @@ export function CustomerPaymentScreen({ navigation }: Props) {
     return [
       {
         id: 'DRIVER_UPI_DIRECT' as const,
-        title: `Pay driver directly${driverDirectProfile.name ? ` · ${driverDirectProfile.name}` : ''}`,
-        description: 'Send full amount to driver UPI'
+        title: `Driver preferred payout${driverDirectProfile.name ? ` · ${driverDirectProfile.name}` : ''}`,
+        description: driverDirectProfile.tripPreferredUpiId
+          ? `Driver preference: ${driverDirectProfile.tripPreferredUpiId} · Paid via QARGO escrow`
+          : 'Driver preference noted · Paid via QARGO escrow',
+        requiresAssignedTrip: true
       },
       ...METHODS
     ];
-  }, [driverDirectProfile.name, hasDriverDirectUpi]);
+  }, [driverDirectProfile.name, driverDirectProfile.tripPreferredUpiId, hasDriverDirectUpi]);
 
   useEffect(() => {
-    if (selectedMethod === 'DRIVER_UPI_DIRECT' && !hasDriverDirectUpi) {
-      setPaymentMethod('UPI_SCAN_PAY');
+    if (
+      (selectedMethod === 'DRIVER_UPI_DIRECT' && !hasDriverDirectUpi) ||
+      ((selectedMethod === 'DRIVER_UPI_DIRECT' || selectedMethod === 'UPI_SCAN_PAY') && !upiEnabled)
+    ) {
+      setPaymentMethod('VISA_5496');
     }
-  }, [hasDriverDirectUpi, selectedMethod, setPaymentMethod]);
+  }, [hasDriverDirectUpi, selectedMethod, setPaymentMethod, upiEnabled]);
 
   useEffect(() => {
     const availableMethods = driverDirectProfile.paymentMethods;
@@ -213,58 +318,33 @@ export function CustomerPaymentScreen({ navigation }: Props) {
       return;
     }
 
-    const preferred = availableMethods.find((method) => method.isPreferred) ?? availableMethods[0];
+    const preferred =
+      availableMethods.find((method) => method.id === driverDirectProfile.tripPreferredPaymentMethodId) ??
+      availableMethods.find((method) => method.isPreferred) ??
+      availableMethods[0];
     setSelectedDriverPaymentMethodId(preferred?.id);
-  }, [driverDirectProfile.paymentMethods, selectedDriverPaymentMethodId]);
-
-  const driverUpiIntentUrl = useMemo(() => {
-    if (!resolvedDriverUpiId || !(baseAmount > 0)) {
-      return undefined;
-    }
-
-    const params = new URLSearchParams({
-      pa: resolvedDriverUpiId,
-      pn: driverDirectProfile.name ?? 'Driver',
-      tn: `Qargo ride payment ${orderId?.slice(0, 8) ?? ''}`,
-      am: baseAmount.toFixed(2),
-      cu: 'INR'
-    });
-
-    return `upi://pay?${params.toString()}`;
-  }, [baseAmount, driverDirectProfile.name, orderId, resolvedDriverUpiId]);
-
-  const driverUpiQrImageUrl = useMemo(() => {
-    if (!resolvedDriverUpiId) {
-      return undefined;
-    }
-
-    if (resolvedDriverUpiQrImageUrl) {
-      return resolvedDriverUpiQrImageUrl;
-    }
-
-    if (!driverUpiIntentUrl) {
-      return undefined;
-    }
-
-    return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(driverUpiIntentUrl)}`;
-  }, [driverUpiIntentUrl, resolvedDriverUpiId, resolvedDriverUpiQrImageUrl]);
+  }, [
+    driverDirectProfile.paymentMethods,
+    driverDirectProfile.tripPreferredPaymentMethodId,
+    selectedDriverPaymentMethodId
+  ]);
 
   const buttonLabel = useMemo(() => {
-    if (orderId && estimatedPrice) {
+    if (orderId && baseAmount > 0) {
       if (selectedMethod === 'CASH') {
         return 'Confirm Cash on Delivery';
       }
       if (selectedMethod === 'DRIVER_UPI_DIRECT') {
-        return `Pay driver INR ${estimatedPrice.toFixed(2)}`;
+        return `Pay INR ${baseAmount.toFixed(2)} (escrow)`;
       }
       if (selectedMethod === 'UPI_SCAN_PAY') {
-        return `Pay INR ${estimatedPrice.toFixed(2)} via UPI`;
+        return `Pay INR ${baseAmount.toFixed(2)} via UPI`;
       }
       return `Pay INR ${payableAmount.toFixed(2)} (incl. card fee)`;
     }
 
-    return 'Done';
-  }, [estimatedPrice, orderId, payableAmount, selectedMethod]);
+    return orderId ? 'Confirm payment setup' : 'Done';
+  }, [baseAmount, orderId, payableAmount, selectedMethod]);
 
   const askForPaymentConfirmation = (title: string, message: string) =>
     new Promise<boolean>((resolve) => {
@@ -287,40 +367,51 @@ export function CustomerPaymentScreen({ navigation }: Props) {
     });
 
   const onSubmit = async () => {
-    if (!orderId || !estimatedPrice) {
+    if (!orderId) {
       navigation.goBack();
+      return;
+    }
+
+    if (paymentStatus === 'CAPTURED') {
+      Alert.alert('Already paid', 'Payment for this ride is already completed.');
+      return;
+    }
+
+    if (!(baseAmount > 0)) {
+      Alert.alert('Amount unavailable', 'Please refresh trip details and retry payment.');
+      return;
+    }
+
+    const usingDriverPreferredRail = selectedMethod === 'DRIVER_UPI_DIRECT';
+    const isUpiMethod = selectedMethod === 'UPI_SCAN_PAY' || usingDriverPreferredRail;
+    if (isUpiMethod && !upiEnabled) {
+      Alert.alert(
+        'UPI available after driver acceptance',
+        'UPI payments unlock once the driver accepts your ride. You can continue with card/cash for now.'
+      );
       return;
     }
 
     setSubmitting(true);
     try {
-      const isDirectToDriver = selectedMethod === 'DRIVER_UPI_DIRECT';
       const provider =
-        selectedMethod === 'UPI_SCAN_PAY' || isDirectToDriver
+        selectedMethod === 'UPI_SCAN_PAY' || usingDriverPreferredRail
           ? 'UPI'
           : selectedMethod === 'CASH'
             ? 'WALLET'
             : 'CASHFREE';
 
-      if (isDirectToDriver && !resolvedDriverUpiId) {
-        Alert.alert('Driver UPI unavailable', 'Driver UPI details are not available for this trip yet.');
-        return;
-      }
-
       const intent = await api.post('/payments/create-intent', {
         orderId,
         provider,
         amount: provider === 'CASHFREE' ? payableAmount : baseAmount,
-        directPayToDriver: isDirectToDriver || undefined,
-        directUpiVpa: isDirectToDriver ? resolvedDriverUpiId : undefined,
-        directUpiName: isDirectToDriver ? driverDirectProfile.name : undefined,
-        driverPaymentMethodId: isDirectToDriver ? selectedDriverPaymentMethod?.id : undefined
+        driverPaymentMethodId: usingDriverPreferredRail ? selectedDriverPaymentMethod?.id : undefined
       });
 
       if (provider === 'WALLET') {
         Alert.alert(
           'Cash on Delivery Selected',
-          'Payment will remain pending until handover. Driver will collect cash or direct UPI at delivery.'
+          'Payment will remain pending until handover. For digital safety, use UPI/card escrow options.'
         );
         await Promise.all([refreshOrder(), refreshTimeline()]);
         navigation.goBack();
@@ -331,9 +422,7 @@ export function CustomerPaymentScreen({ navigation }: Props) {
       let providerReference = String(intent.data?.providerRef ?? `PAY_${Date.now()}`);
 
       if (provider === 'UPI') {
-        const upiIntentUrl =
-          (intent.data?.upiIntentUrl as string | undefined) ||
-          (isDirectToDriver ? driverUpiIntentUrl : undefined);
+        const upiIntentUrl = intent.data?.upiIntentUrl as string | undefined;
         if (upiIntentUrl) {
           const canOpen = await Linking.canOpenURL(upiIntentUrl);
           if (canOpen) {
@@ -379,8 +468,8 @@ export function CustomerPaymentScreen({ navigation }: Props) {
           'Payment Complete',
           provider === 'CASHFREE'
             ? `Payment confirmed. Card surcharge applied: INR ${cardSurchargeAmount.toFixed(2)}`
-            : isDirectToDriver
-              ? 'Payment confirmed directly to driver UPI.'
+            : usingDriverPreferredRail
+              ? 'Payment confirmed. Funds are held by QARGO and settled to the driver after delivery.'
               : 'Payment confirmed for this order.'
         );
       } else {
@@ -413,21 +502,46 @@ export function CustomerPaymentScreen({ navigation }: Props) {
           <View style={styles.hero}>
             <Text style={styles.heroTitle}>Pay the Bharat way</Text>
             <Text style={styles.heroSub}>UPI, cards, or cash. Card payments carry a 2.5% processing surcharge.</Text>
+            <Text style={styles.heroMeta}>
+              {upiEnabled
+                ? 'UPI is active for this ride (during/after trip).'
+                : 'UPI unlocks once driver accepts. Cards and cash can be selected now.'}
+            </Text>
+            <Text style={styles.heroMeta}>All digital payments are held by QARGO and settled after delivery.</Text>
+            {driverDirectProfile.tripPreferredPaymentLabel || driverDirectProfile.tripPreferredUpiId ? (
+              <Text style={styles.heroMetaStrong}>
+                Driver prefers{' '}
+                {driverDirectProfile.tripPreferredPaymentLabel ?? driverDirectProfile.tripPreferredUpiId}
+              </Text>
+            ) : null}
+            {paymentStatus === 'CAPTURED' ? (
+              <Text style={styles.heroMetaStrong}>Payment already completed for this ride.</Text>
+            ) : null}
           </View>
 
           {selectedMethod === 'DRIVER_UPI_DIRECT' ? (
             <View style={styles.driverDirectCard}>
-              <Text style={styles.driverDirectTitle}>Driver direct payout</Text>
+              <Text style={styles.driverDirectTitle}>Driver payout preference</Text>
               {loadingDriverProfile ? (
                 <ActivityIndicator color="#0F766E" />
               ) : (
                 <>
                   <Text style={styles.driverDirectLine}>Driver: {driverDirectProfile.name ?? 'Assigned driver'}</Text>
                   <Text style={styles.driverDirectLine}>UPI ID: {resolvedDriverUpiId ?? 'Not available'}</Text>
+                  <Text style={styles.driverDirectHint}>Customer payment goes to QARGO escrow first.</Text>
+                  {driverDirectProfile.tripPreferredPaymentLabel || driverDirectProfile.tripPreferredUpiId ? (
+                    <Text style={styles.driverDirectHint}>
+                      Driver prefers:{' '}
+                      {driverDirectProfile.tripPreferredPaymentLabel ??
+                        driverDirectProfile.tripPreferredUpiId}
+                    </Text>
+                  ) : null}
                   {driverDirectProfile.paymentMethods.length > 1 ? (
                     <View style={styles.driverMethodChipRow}>
                       {driverDirectProfile.paymentMethods.map((method) => {
                         const isSelected = method.id === selectedDriverPaymentMethod?.id;
+                        const isDriverPreferred =
+                          method.id === driverDirectProfile.tripPreferredPaymentMethodId;
                         return (
                           <Pressable
                             key={method.id}
@@ -444,13 +558,13 @@ export function CustomerPaymentScreen({ navigation }: Props) {
                               ]}
                             >
                               {method.label ?? method.upiId}
+                              {isDriverPreferred ? ' • Driver preferred' : ''}
                             </Text>
                           </Pressable>
                         );
                       })}
                     </View>
                   ) : null}
-                  {driverUpiQrImageUrl ? <Image source={{ uri: driverUpiQrImageUrl }} style={styles.qrImage} /> : null}
                 </>
               )}
             </View>
@@ -468,15 +582,32 @@ export function CustomerPaymentScreen({ navigation }: Props) {
           <View style={styles.methodList}>
             {methods.map((method) => {
               const selected = method.id === selectedMethod;
+              const unavailable = Boolean(method.requiresAssignedTrip && !upiEnabled);
               return (
                 <Pressable
                   key={method.id}
-                  style={[styles.methodCard, selected && styles.methodCardSelected]}
-                  onPress={() => setPaymentMethod(method.id)}
+                  style={[
+                    styles.methodCard,
+                    selected && styles.methodCardSelected,
+                    unavailable && styles.methodCardDisabled
+                  ]}
+                  onPress={() => {
+                    if (unavailable) {
+                      Alert.alert(
+                        'Available after driver acceptance',
+                        'This UPI option unlocks once your driver accepts the trip.'
+                      );
+                      return;
+                    }
+                    setPaymentMethod(method.id);
+                  }}
                 >
                   <View style={styles.methodCopy}>
                     <Text style={styles.methodTitle}>{method.title}</Text>
-                    <Text style={styles.methodDescription}>{method.description}</Text>
+                    <Text style={[styles.methodDescription, unavailable && styles.methodDescriptionMuted]}>
+                      {method.description}
+                      {unavailable ? ' · Available after driver accepts' : ''}
+                    </Text>
                   </View>
                   <View style={[styles.radio, selected && styles.radioSelected]}>
                     {selected ? <Text style={styles.radioTick}>v</Text> : null}
@@ -562,6 +693,18 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_500Medium',
     fontSize: 13
   },
+  heroMeta: {
+    marginTop: 6,
+    color: '#7C2D12',
+    fontFamily: 'Manrope_600SemiBold',
+    fontSize: 12
+  },
+  heroMetaStrong: {
+    marginTop: 3,
+    color: '#9A3412',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
   driverDirectCard: {
     borderRadius: 14,
     borderWidth: 1,
@@ -579,6 +722,11 @@ const styles = StyleSheet.create({
   driverDirectLine: {
     color: '#0F172A',
     fontFamily: 'Manrope_600SemiBold',
+    fontSize: 12
+  },
+  driverDirectHint: {
+    color: '#0F766E',
+    fontFamily: 'Manrope_700Bold',
     fontSize: 12
   },
   driverMethodChipRow: {
@@ -606,15 +754,6 @@ const styles = StyleSheet.create({
   },
   driverMethodChipTextSelected: {
     color: '#065F46'
-  },
-  qrImage: {
-    width: 168,
-    height: 168,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    marginTop: 4,
-    backgroundColor: '#FFFFFF'
   },
   surchargeCard: {
     marginTop: 10,
@@ -661,6 +800,9 @@ const styles = StyleSheet.create({
     borderColor: '#0F766E',
     backgroundColor: '#ECFDF5'
   },
+  methodCardDisabled: {
+    opacity: 0.6
+  },
   methodCopy: {
     flex: 1
   },
@@ -674,6 +816,9 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_500Medium',
     fontSize: 12,
     marginTop: 2
+  },
+  methodDescriptionMuted: {
+    color: '#94A3B8'
   },
   radio: {
     width: 22,

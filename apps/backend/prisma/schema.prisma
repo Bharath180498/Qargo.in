@@ -191,6 +191,7 @@ model User {
   driverPaymentMethods DriverPaymentMethod[]
   supportTicketsRequested SupportTicket[] @relation("SupportTicketsRequested")
   supportMessagesSent SupportTicketMessage[] @relation("SupportMessagesSent")
+  customerPushTokens CustomerPushToken[]
 }
 
 model DriverProfile {
@@ -278,6 +279,10 @@ model Trip {
   orderId           String      @unique
   driverId          String
   queuedDriverId    String?
+  driverPreferredPaymentMethodId String?
+  driverPreferredUpiId String?
+  driverPreferredPaymentLabel String?
+  driverPreferredUpiQrImageUrl String?
   status            TripStatus  @default(ASSIGNED)
   etaMinutes        Int?
   pickupTime        DateTime?
@@ -359,6 +364,9 @@ model SupportTicket {
   tripId           String?
   subject          String
   description      String
+  descriptionSourceLanguage     String?
+  descriptionTranslatedEnglish  String?
+  descriptionTranslationProvider String?
   status           SupportTicketStatus  @default(OPEN)
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
@@ -381,13 +389,32 @@ model SupportTicketMessage {
   senderType       SupportMessageSenderType
   senderUserId     String?
   message          String
+  sourceLanguage    String?
+  translatedEnglish String?
+  translationProvider String?
   createdAt        DateTime                  @default(now())
 
   ticket           SupportTicket             @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   senderUser       User?                     @relation("SupportMessagesSent", fields: [senderUserId], references: [id], onDelete: SetNull)
+  attachments      SupportTicketMessageAttachment[]
 
   @@index([ticketId, createdAt])
   @@index([senderUserId, createdAt])
+}
+
+model SupportTicketMessageAttachment {
+  id            String               @id @default(uuid())
+  messageId     String
+  fileKey       String
+  fileUrl       String
+  fileName      String?
+  contentType   String?
+  fileSizeBytes Int?
+  createdAt     DateTime             @default(now())
+
+  message       SupportTicketMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId, createdAt])
 }
 
 model OtpSession {
@@ -553,6 +580,23 @@ model DriverPushToken {
   driver         DriverProfile @relation(fields: [driverId], references: [id])
 
   @@index([driverId, isActive])
+}
+
+model CustomerPushToken {
+  id             String   @id @default(uuid())
+  customerId     String
+  token          String   @unique
+  platform       String
+  appVersion     String?
+  deviceId       String?
+  isActive       Boolean  @default(true)
+  lastSeenAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  customer       User     @relation(fields: [customerId], references: [id])
+
+  @@index([customerId, isActive])
 }
 
 model DriverEnterprisePlanRequest {

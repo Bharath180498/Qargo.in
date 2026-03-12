@@ -15,6 +15,18 @@ interface OperationsSummary {
   busyDrivers: number;
 }
 
+interface DeliveryProof {
+  id: string;
+  receiverName: string;
+  receiverSignature: unknown;
+  photoUrl: string;
+  photoFileKey: string;
+  photoMimeType: string | null;
+  signatureCapturedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface BookingRow {
   id: string;
   status: string;
@@ -32,6 +44,7 @@ interface BookingRow {
   trip: {
     id: string;
     status: string;
+    deliveryProof: DeliveryProof | null;
     driver: {
       id: string;
       user: {
@@ -51,6 +64,7 @@ interface RideRow {
   durationMinutes: number | null;
   createdAt: string;
   updatedAt: string;
+  deliveryProof: DeliveryProof | null;
   driver: {
     id: string;
     user: {
@@ -74,12 +88,63 @@ interface RideRow {
 interface OrderDetailResponse {
   id: string;
   status: string;
+  createdAt: string;
+  updatedAt: string;
   pickupAddress: string;
   dropAddress: string;
+  pickupLat: number;
+  pickupLng: number;
+  dropLat: number;
+  dropLng: number;
+  vehicleType: string;
   goodsDescription: string;
+  goodsType: string | null;
+  goodsValue: number;
+  estimatedPrice: number;
+  finalPrice: number | null;
+  waitingCharge: number;
+  ewayBillNumber: string | null;
+  customer: {
+    id: string;
+    name: string;
+    phone: string;
+  };
+  payment: {
+    provider: string;
+    status: string;
+    amount: number;
+    providerRef: string | null;
+    updatedAt: string;
+  } | null;
   trip?: {
     id: string;
     status: string;
+    etaMinutes: number | null;
+    pickupTime: string | null;
+    loadingStart: string | null;
+    loadingEnd: string | null;
+    deliveryTime: string | null;
+    distanceKm: number | null;
+    durationMinutes: number | null;
+    waitingCharge: number;
+    deliveryProof: DeliveryProof | null;
+    rating: {
+      driverRating: number | null;
+      customerRating: number | null;
+      review: string | null;
+    } | null;
+    driver: {
+      id: string;
+      vehicleType: string;
+      vehicleNumber: string;
+      licenseNumber: string;
+      user: {
+        id: string;
+        name: string;
+        phone: string;
+        rating: number | null;
+      };
+    } | null;
   } | null;
 }
 
@@ -135,6 +200,122 @@ function statusTone(status: string) {
   }
 
   return 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-400/30';
+}
+
+function asNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatInr(value: unknown) {
+  return `INR ${asNumber(value).toFixed(0)}`;
+}
+
+interface SignaturePoint {
+  x: number;
+  y: number;
+}
+
+interface ParsedSignature {
+  width: number;
+  height: number;
+  strokes: SignaturePoint[][];
+}
+
+function parseSignature(raw: unknown): ParsedSignature | null {
+  const payload = (() => {
+    if (typeof raw === 'string') {
+      try {
+        return JSON.parse(raw) as unknown;
+      } catch {
+        return null;
+      }
+    }
+    return raw;
+  })();
+
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+
+  const candidate = payload as { width?: unknown; height?: unknown; strokes?: unknown };
+  const width = Number(candidate.width);
+  const height = Number(candidate.height);
+
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+
+  if (!Array.isArray(candidate.strokes)) {
+    return null;
+  }
+
+  const strokes = candidate.strokes
+    .map((stroke) => {
+      if (!Array.isArray(stroke)) {
+        return [] as SignaturePoint[];
+      }
+
+      return stroke
+        .map((point) => {
+          if (!point || typeof point !== 'object') {
+            return null;
+          }
+
+          const row = point as { x?: unknown; y?: unknown };
+          const x = Number(row.x);
+          const y = Number(row.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return null;
+          }
+
+          return { x, y };
+        })
+        .filter((point): point is SignaturePoint => point !== null);
+    })
+    .filter((stroke) => stroke.length >= 2);
+
+  if (strokes.length === 0) {
+    return null;
+  }
+
+  return { width, height, strokes };
+}
+
+function SignaturePreview({ signature }: { signature: unknown }) {
+  const parsed = useMemo(() => parseSignature(signature), [signature]);
+
+  if (!parsed) {
+    return (
+      <p className="rounded-md border border-slate-800 bg-slate-950/70 px-3 py-2 text-xs text-slate-500">
+        Signature not available
+      </p>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-md border border-slate-800 bg-slate-950/70 p-2">
+      <svg viewBox={`0 0 ${parsed.width} ${parsed.height}`} className="h-24 w-full" preserveAspectRatio="none">
+        {parsed.strokes.map((stroke, strokeIndex) =>
+          stroke.slice(1).map((point, pointIndex) => {
+            const previous = stroke[pointIndex];
+            return (
+              <line
+                key={`${strokeIndex}-${pointIndex}`}
+                x1={previous.x}
+                y1={previous.y}
+                x2={point.x}
+                y2={point.y}
+                stroke="#22d3ee"
+                strokeWidth={2.2}
+                strokeLinecap="round"
+              />
+            );
+          })
+        )}
+      </svg>
+    </div>
+  );
 }
 
 export default function OperationsPage() {
@@ -209,6 +390,8 @@ export default function OperationsPage() {
     }
   ];
 
+  const selectedDeliveryProof = orderDetail?.trip?.deliveryProof ?? null;
+
   return (
     <NavShell>
       <section className="space-y-5">
@@ -277,6 +460,11 @@ export default function OperationsPage() {
                                 {booking.trip.status}
                               </span>
                               <p className="mt-1 text-xs text-slate-400">{booking.trip.driver.user.name}</p>
+                              {booking.trip.deliveryProof ? (
+                                <span className="mt-1 inline-flex rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300 ring-1 ring-emerald-400/30">
+                                  Proof captured
+                                </span>
+                              ) : null}
                             </>
                           ) : (
                             <p className="text-xs text-slate-500">Not assigned</p>
@@ -349,6 +537,11 @@ export default function OperationsPage() {
                             {ride.order.status}
                           </span>
                           <p className="mt-1 text-xs text-slate-400">{ride.order.customer.name}</p>
+                          {ride.deliveryProof ? (
+                            <span className="mt-1 inline-flex rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300 ring-1 ring-emerald-400/30">
+                              Proof captured
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-4 py-3 text-xs text-slate-400">{formatDate(ride.updatedAt)}</td>
                         <td className="px-4 py-3">
@@ -398,11 +591,67 @@ export default function OperationsPage() {
                 <section>
                   <p className="font-manrope text-xs uppercase tracking-wide text-slate-500">Booking Snapshot</p>
                   <p className="mt-1 font-sora text-lg text-slate-100">#{shortId(orderDetail?.id ?? selectedOrderId)}</p>
-                  <div className="mt-2 space-y-1 font-manrope text-sm text-slate-300">
-                    <p>Status: {orderDetail?.status ?? '--'}</p>
-                    <p className="text-xs text-slate-400">Pickup: {orderDetail?.pickupAddress ?? '--'}</p>
-                    <p className="text-xs text-slate-400">Drop: {orderDetail?.dropAddress ?? '--'}</p>
-                    <p className="text-xs text-slate-400">Goods: {orderDetail?.goodsDescription ?? '--'}</p>
+                  <div className="mt-2 space-y-1 font-manrope text-xs text-slate-300">
+                    <p>
+                      Status:{' '}
+                      <span className={`inline-flex rounded-md px-2 py-0.5 text-xs ${statusTone(orderDetail?.status ?? 'UNKNOWN')}`}>
+                        {orderDetail?.status ?? '--'}
+                      </span>
+                    </p>
+                    <p className="text-slate-400">Customer: {orderDetail?.customer?.name ?? '--'}</p>
+                    <p className="text-slate-400">Customer Phone: {orderDetail?.customer?.phone ?? '--'}</p>
+                    <p className="text-slate-400">Pickup: {orderDetail?.pickupAddress ?? '--'}</p>
+                    <p className="text-slate-400">Drop: {orderDetail?.dropAddress ?? '--'}</p>
+                    <p className="text-slate-400">
+                      Coordinates: {asNumber(orderDetail?.pickupLat).toFixed(5)},{' '}
+                      {asNumber(orderDetail?.pickupLng).toFixed(5)} → {asNumber(orderDetail?.dropLat).toFixed(5)},{' '}
+                      {asNumber(orderDetail?.dropLng).toFixed(5)}
+                    </p>
+                    <p className="text-slate-400">Vehicle: {orderDetail?.vehicleType ?? '--'}</p>
+                    <p className="text-slate-400">Goods: {orderDetail?.goodsDescription ?? '--'}</p>
+                    <p className="text-slate-400">Goods Type: {orderDetail?.goodsType ?? '--'}</p>
+                    <p className="text-slate-400">Goods Value: {formatInr(orderDetail?.goodsValue)}</p>
+                    <p className="text-slate-400">Estimated Fare: {formatInr(orderDetail?.estimatedPrice)}</p>
+                    <p className="text-slate-400">Final Fare: {formatInr(orderDetail?.finalPrice ?? orderDetail?.estimatedPrice)}</p>
+                    <p className="text-slate-400">Waiting Charge: {formatInr(orderDetail?.waitingCharge)}</p>
+                    <p className="text-slate-400">E-way Bill: {orderDetail?.ewayBillNumber ?? '--'}</p>
+                    <p className="text-slate-400">Created: {orderDetail?.createdAt ? formatDate(orderDetail.createdAt) : '--'}</p>
+                    <p className="text-slate-400">Updated: {orderDetail?.updatedAt ? formatDate(orderDetail.updatedAt) : '--'}</p>
+                  </div>
+                  <div className="mt-3 space-y-1 rounded-md border border-slate-800 bg-slate-950/70 p-2 font-manrope text-xs text-slate-300">
+                    <p className="font-semibold text-slate-200">Trip Execution</p>
+                    <p className="text-slate-400">Trip ID: {orderDetail?.trip?.id ?? '--'}</p>
+                    <p className="text-slate-400">Trip Status: {orderDetail?.trip?.status ?? '--'}</p>
+                    <p className="text-slate-400">ETA Minutes: {orderDetail?.trip?.etaMinutes ?? '--'}</p>
+                    <p className="text-slate-400">
+                      Distance / Duration: {orderDetail?.trip?.distanceKm ?? '--'} km / {orderDetail?.trip?.durationMinutes ?? '--'} min
+                    </p>
+                    <p className="text-slate-400">Driver: {orderDetail?.trip?.driver?.user?.name ?? '--'}</p>
+                    <p className="text-slate-400">Driver Phone: {orderDetail?.trip?.driver?.user?.phone ?? '--'}</p>
+                    <p className="text-slate-400">Vehicle No: {orderDetail?.trip?.driver?.vehicleNumber ?? '--'}</p>
+                    <p className="text-slate-400">License: {orderDetail?.trip?.driver?.licenseNumber ?? '--'}</p>
+                    <p className="text-slate-400">
+                      Pickup Time: {orderDetail?.trip?.pickupTime ? formatDate(orderDetail.trip.pickupTime) : '--'}
+                    </p>
+                    <p className="text-slate-400">
+                      Loading Start: {orderDetail?.trip?.loadingStart ? formatDate(orderDetail.trip.loadingStart) : '--'}
+                    </p>
+                    <p className="text-slate-400">
+                      Loading End: {orderDetail?.trip?.loadingEnd ? formatDate(orderDetail.trip.loadingEnd) : '--'}
+                    </p>
+                    <p className="text-slate-400">
+                      Delivery Time: {orderDetail?.trip?.deliveryTime ? formatDate(orderDetail.trip.deliveryTime) : '--'}
+                    </p>
+                  </div>
+                  <div className="mt-3 space-y-1 rounded-md border border-slate-800 bg-slate-950/70 p-2 font-manrope text-xs text-slate-300">
+                    <p className="font-semibold text-slate-200">Payment Snapshot</p>
+                    <p className="text-slate-400">Provider: {orderDetail?.payment?.provider ?? '--'}</p>
+                    <p className="text-slate-400">Status: {orderDetail?.payment?.status ?? '--'}</p>
+                    <p className="text-slate-400">Amount: {formatInr(orderDetail?.payment?.amount ?? orderDetail?.finalPrice)}</p>
+                    <p className="text-slate-400">Provider Ref: {orderDetail?.payment?.providerRef ?? '--'}</p>
+                    <p className="text-slate-400">
+                      Payment Updated: {orderDetail?.payment?.updatedAt ? formatDate(orderDetail.payment.updatedAt) : '--'}
+                    </p>
                   </div>
                 </section>
 
@@ -419,6 +668,39 @@ export default function OperationsPage() {
                       <li className="text-sm text-slate-500">No timeline data yet.</li>
                     ) : null}
                   </ul>
+                </section>
+
+                <section>
+                  <p className="font-manrope text-xs uppercase tracking-wide text-slate-500">Delivery Proof</p>
+                  {selectedDeliveryProof ? (
+                    <div className="mt-2 space-y-2 rounded-md border border-emerald-400/30 bg-emerald-500/10 p-3">
+                      <p className="font-manrope text-xs text-emerald-200">
+                        Receiver: <span className="font-semibold">{selectedDeliveryProof.receiverName}</span>
+                      </p>
+                      <p className="font-manrope text-xs text-emerald-200">
+                        Captured:{' '}
+                        {selectedDeliveryProof.signatureCapturedAt
+                          ? formatDate(selectedDeliveryProof.signatureCapturedAt)
+                          : formatDate(selectedDeliveryProof.createdAt)}
+                      </p>
+                      <p className="font-manrope text-xs text-emerald-200">
+                        File Key: {selectedDeliveryProof.photoFileKey || '--'}
+                      </p>
+                      <p className="font-manrope text-xs text-emerald-200">
+                        MIME: {selectedDeliveryProof.photoMimeType || '--'}
+                      </p>
+                      {selectedDeliveryProof.photoUrl ? (
+                        <img
+                          src={selectedDeliveryProof.photoUrl}
+                          alt="Delivery proof"
+                          className="h-40 w-full rounded-md border border-emerald-400/30 object-cover"
+                        />
+                      ) : null}
+                      <SignaturePreview signature={selectedDeliveryProof.receiverSignature} />
+                    </div>
+                  ) : (
+                    <p className="mt-2 font-manrope text-sm text-slate-500">No delivery proof captured yet.</p>
+                  )}
                 </section>
 
                 <section>

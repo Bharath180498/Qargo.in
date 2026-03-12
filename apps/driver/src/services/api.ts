@@ -64,6 +64,20 @@ export const SUPPORT_PHONE =
     ? configuredSupportPhoneRaw.trim()
     : '9844259899';
 
+export function maskPhone(phone: string) {
+  const digits = phone.replace(/\D/g, '');
+  if (!digits) {
+    return '••••••';
+  }
+  if (digits.length <= 4) {
+    return `••${digits.slice(-2)}`;
+  }
+  const prefix = digits.slice(0, 2);
+  const suffix = digits.slice(-2);
+  const hidden = '•'.repeat(Math.max(4, digits.length - 4));
+  return `${prefix}${hidden}${suffix}`;
+}
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 12000

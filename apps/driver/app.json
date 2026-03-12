@@ -20,11 +20,15 @@
     "android": {
       "package": "com.qargo.driver",
       "permissions": [
+        "POST_NOTIFICATIONS",
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION"
       ]
     },
+    "plugins": [
+      "expo-notifications"
+    ],
     "extra": {
       "apiBaseUrl": "https://backend-production-0ee70.up.railway.app/api",
       "supportPhone": "9844259899"

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import api from '../../services/api';
 import { isOngoingOrderStatus, useCustomerStore } from '../../store/useCustomerStore';
 import type { RootStackParamList } from '../../types/navigation';
+import { DeliverySignaturePreview } from '../../components/DeliverySignaturePreview';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CustomerRideDetails'>;
 
@@ -48,6 +49,8 @@ interface RideDetailsResponse {
   } | null;
   trip?: {
     status?: string | null;
+    driverPreferredUpiId?: string | null;
+    driverPreferredPaymentLabel?: string | null;
     etaMinutes?: number | null;
     pickupTime?: string | null;
     loadingStart?: string | null;
@@ -77,6 +80,14 @@ interface RideDetailsResponse {
       driverRating?: number | null;
       customerRating?: number | null;
       review?: string | null;
+    } | null;
+    deliveryProof?: {
+      id?: string;
+      receiverName?: string | null;
+      receiverSignature?: unknown;
+      photoUrl?: string | null;
+      signatureCapturedAt?: string | null;
+      createdAt?: string;
     } | null;
   } | null;
 }
@@ -163,12 +174,34 @@ export function CustomerRideDetailsScreen({ navigation, route }: Props) {
     return asNumber(ride.estimatedPrice) + asNumber(ride.waitingCharge) + asNumber(ride.insurancePremium);
   }, [ride]);
 
+  const deliveryProof = ride?.trip?.deliveryProof;
+  const proofReceiver = typeof deliveryProof?.receiverName === 'string' ? deliveryProof.receiverName : '';
+  const proofPhotoUrl = typeof deliveryProof?.photoUrl === 'string' ? deliveryProof.photoUrl : '';
+  const proofCapturedAt =
+    typeof deliveryProof?.signatureCapturedAt === 'string'
+      ? deliveryProof.signatureCapturedAt
+      : typeof deliveryProof?.createdAt === 'string'
+      ? deliveryProof.createdAt
+      : undefined;
+  const hasDeliveryProof = Boolean(proofReceiver || proofPhotoUrl || deliveryProof?.receiverSignature);
+  const paymentStatus = String(ride?.payment?.status ?? 'PENDING').toUpperCase();
+  const paymentPending = paymentStatus !== 'CAPTURED' && ride?.status !== 'CANCELLED';
+  const driverPreferredPayment = ride?.trip?.driverPreferredPaymentLabel ?? ride?.trip?.driverPreferredUpiId;
+
   const openTracking = () => {
     if (!ride) {
       return;
     }
     setActiveOrder(ride.id, ride.status);
     navigation.navigate('CustomerTracking');
+  };
+
+  const openPayment = () => {
+    if (!ride) {
+      return;
+    }
+    setActiveOrder(ride.id, ride.status);
+    navigation.navigate('CustomerPayment');
   };
 
   return (
@@ -240,6 +273,18 @@ export function CustomerRideDetailsScreen({ navigation, route }: Props) {
               <Text style={styles.lineItem}>Driver UPI: {ride.trip?.driver?.payoutAccount?.upiId ?? 'N/A'}</Text>
             </View>
 
+            {hasDeliveryProof ? (
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Proof of Delivery</Text>
+                <Text style={styles.lineItem}>Receiver: {proofReceiver || 'Captured'}</Text>
+                <Text style={styles.lineItem}>Captured: {formatDateTime(proofCapturedAt)}</Text>
+                {proofPhotoUrl ? (
+                  <Image source={{ uri: proofPhotoUrl }} style={styles.proofImage} resizeMode="cover" />
+                ) : null}
+                <DeliverySignaturePreview signature={deliveryProof?.receiverSignature} height={108} />
+              </View>
+            ) : null}
+
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Bill Summary</Text>
               <Text style={styles.lineItem}>Estimated Fare: {formatInr(ride.estimatedPrice)}</Text>
@@ -255,6 +300,17 @@ export function CustomerRideDetailsScreen({ navigation, route }: Props) {
               <Text style={styles.lineItem}>Amount: {formatInr(ride.payment?.amount ?? ride.finalPrice ?? ride.estimatedPrice)}</Text>
               <Text style={styles.lineItem}>Provider Ref: {ride.payment?.providerRef ?? 'N/A'}</Text>
               <Text style={styles.lineItem}>Updated: {formatDateTime(ride.payment?.updatedAt)}</Text>
+              {driverPreferredPayment ? (
+                <Text style={styles.lineItem}>Driver preferred payment: {driverPreferredPayment}</Text>
+              ) : null}
+              {paymentPending ? (
+                <>
+                  <Text style={styles.pendingPaymentCopy}>Payment is still pending for this ride.</Text>
+                  <Pressable style={styles.payNowButton} onPress={openPayment}>
+                    <Text style={styles.payNowButtonText}>Pay now</Text>
+                  </Pressable>
+                </>
+              ) : null}
             </View>
 
             <View style={styles.sectionCard}>
@@ -420,11 +476,38 @@ const styles = StyleSheet.create({
     fontFamily: 'Manrope_500Medium',
     fontSize: 13
   },
+  pendingPaymentCopy: {
+    marginTop: 4,
+    color: '#9A3412',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 12
+  },
+  payNowButton: {
+    marginTop: 4,
+    borderRadius: 10,
+    backgroundColor: '#1D4ED8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10
+  },
+  payNowButtonText: {
+    color: '#EFF6FF',
+    fontFamily: 'Manrope_700Bold',
+    fontSize: 13
+  },
   billFinal: {
     marginTop: 2,
     color: '#0F766E',
     fontFamily: 'Manrope_700Bold',
     fontSize: 14
+  },
+  proofImage: {
+    width: '100%',
+    height: 150,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    backgroundColor: '#DCFCE7'
   },
   timelineItem: {
     borderRadius: 10,

@@ -4,6 +4,7 @@ import { SupportService } from './support.service';
 import { AddSupportTicketMessageDto } from './dto/add-support-ticket-message.dto';
 import { CreateSupportTicketDto } from './dto/create-support-ticket.dto';
 import { SupportUserQueryDto } from './dto/support-user-query.dto';
+import { GenerateSupportMessageUploadUrlDto } from './dto/generate-support-message-upload-url.dto';
 
 @Controller('support')
 export class SupportController {
@@ -37,5 +38,13 @@ export class SupportController {
   @Post('tickets/:ticketId/messages')
   addMessage(@Param('ticketId') ticketId: string, @Body() payload: AddSupportTicketMessageDto) {
     return this.supportService.addUserMessage(ticketId, payload);
+  }
+
+  @Post('tickets/:ticketId/messages/upload-url')
+  generateMessageUploadUrl(
+    @Param('ticketId') ticketId: string,
+    @Body() payload: GenerateSupportMessageUploadUrlDto
+  ) {
+    return this.supportService.generateMessageAttachmentUploadUrl(ticketId, payload);
   }
 }

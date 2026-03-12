@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
-  Linking,
+  Modal,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -21,7 +22,8 @@ import { openGoogleMapsNavigation } from '../../utils/mapsNavigation';
 import { speakDriverMessage } from '../../utils/voiceGuide';
 import { DeliveryProofModal, type DeliveryProofSubmission } from '../../components/DeliveryProofModal';
 import type { DriverTabParamList } from '../../types';
-import { SUPPORT_PHONE } from '../../services/api';
+import api, { SUPPORT_PHONE, maskPhone } from '../../services/api';
+import { useDriverSessionStore } from '../../store/useDriverSessionStore';
 
 const actionMap: Array<{ status: string; endpoint: string; label: string; payload?: Record<string, unknown> }> = [
   { status: 'ASSIGNED', endpoint: 'accept', label: 'Start Trip' },
@@ -48,6 +50,13 @@ const TRIP_STAGES: Array<{ key: string; label: string }> = [
 interface CompletionMetrics {
   distanceKm?: number;
   durationMinutes?: number;
+}
+
+interface OfferPaymentMethod {
+  id: string;
+  label?: string;
+  upiId: string;
+  isPreferred: boolean;
 }
 
 function parseCompletionMetric(value: unknown) {
@@ -97,6 +106,7 @@ export function HomeScreen() {
   const rejectOffer = useDriverAppStore((state) => state.rejectOffer);
   const runTripAction = useDriverAppStore((state) => state.runTripAction);
   const completeTripWithDeliveryProof = useDriverAppStore((state) => state.completeTripWithDeliveryProof);
+  const sessionUser = useDriverSessionStore((state) => state.user);
 
   const voiceGuidanceEnabled = useDriverUxStore((state) => state.voiceGuidanceEnabled);
   const guidedHintsEnabled = useDriverUxStore((state) => state.guidedHintsEnabled);
@@ -106,15 +116,21 @@ export function HomeScreen() {
   const [deliveryProofVisible, setDeliveryProofVisible] = useState(false);
   const [deliveryProofSubmitting, setDeliveryProofSubmitting] = useState(false);
   const [completionMetrics, setCompletionMetrics] = useState<CompletionMetrics>({});
+  const [offerPaymentPickerVisible, setOfferPaymentPickerVisible] = useState(false);
+  const [offerPaymentMethods, setOfferPaymentMethods] = useState<OfferPaymentMethod[]>([]);
+  const [selectedOfferPaymentMethodId, setSelectedOfferPaymentMethodId] = useState<string>();
+  const [acceptingOffer, setAcceptingOffer] = useState(false);
+  const maskedSupportPhone = useMemo(() => maskPhone(SUPPORT_PHONE), []);
 
   const callSupport = async () => {
-    const url = `tel:${SUPPORT_PHONE}`;
-    const canOpen = await Linking.canOpenURL(url);
-    if (canOpen) {
-      await Linking.openURL(url);
-      return;
-    }
-    Alert.alert('Support', `Please call ${SUPPORT_PHONE} for assistance.`);
+    Alert.alert(
+      'Message support first',
+      'Please create or reply to a support ticket first. We aim to resolve within 6 hours. If unresolved in 24 hours, call support to escalate.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open Support Center', onPress: () => navigation.navigate('Support') }
+      ]
+    );
   };
 
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
@@ -173,6 +189,15 @@ export function HomeScreen() {
       previousOfferId.current = undefined;
     }
   }, [activeOffer?.id, t, voiceGuidanceEnabled]);
+
+  useEffect(() => {
+    if (activeOffer?.id) {
+      return;
+    }
+    setOfferPaymentPickerVisible(false);
+    setOfferPaymentMethods([]);
+    setSelectedOfferPaymentMethodId(undefined);
+  }, [activeOffer?.id]);
 
   useEffect(() => {
     const currentStatus = currentJob?.status;
@@ -327,8 +352,80 @@ export function HomeScreen() {
     if (!activeOffer?.id) {
       return;
     }
-    await acceptOffer(activeOffer.id);
-    speakDriverMessage('Job accepted. Start navigation now.', voiceGuidanceEnabled);
+
+    const userId = sessionUser?.id;
+    if (!userId) {
+      await acceptOffer(activeOffer.id);
+      speakDriverMessage('Job accepted. Start navigation now.', voiceGuidanceEnabled);
+      return;
+    }
+
+    setAcceptingOffer(true);
+    try {
+      const response = await api.get('/driver-onboarding/payment-methods', {
+        params: { userId }
+      });
+
+      const methods = Array.isArray(response.data)
+        ? (response.data
+            .map((row) => {
+              if (!row || typeof row !== 'object') {
+                return null;
+              }
+              const candidate = row as Record<string, unknown>;
+              const id = typeof candidate.id === 'string' ? candidate.id : '';
+              const upiId = typeof candidate.upiId === 'string' ? candidate.upiId : '';
+              if (!id || !upiId) {
+                return null;
+              }
+              return {
+                id,
+                label:
+                  typeof candidate.label === 'string' && candidate.label.trim()
+                    ? candidate.label.trim()
+                    : undefined,
+                upiId: upiId.trim().toLowerCase(),
+                isPreferred: Boolean(candidate.isPreferred)
+              } satisfies OfferPaymentMethod;
+            })
+            .filter((method) => method !== null) as OfferPaymentMethod[])
+        : [];
+
+      if (methods.length <= 1) {
+        await acceptOffer(activeOffer.id, methods[0]?.id);
+        speakDriverMessage('Job accepted. Start navigation now.', voiceGuidanceEnabled);
+        return;
+      }
+
+      const preferred = methods.find((method) => method.isPreferred) ?? methods[0];
+      setOfferPaymentMethods(methods);
+      setSelectedOfferPaymentMethodId(preferred?.id);
+      setOfferPaymentPickerVisible(true);
+    } catch {
+      await acceptOffer(activeOffer.id);
+      speakDriverMessage('Job accepted. Start navigation now.', voiceGuidanceEnabled);
+    } finally {
+      setAcceptingOffer(false);
+    }
+  };
+
+  const confirmOfferPaymentMethod = async () => {
+    if (!activeOffer?.id) {
+      return;
+    }
+
+    setAcceptingOffer(true);
+    try {
+      await acceptOffer(activeOffer.id, selectedOfferPaymentMethodId);
+      setOfferPaymentPickerVisible(false);
+      setOfferPaymentMethods([]);
+      setSelectedOfferPaymentMethodId(undefined);
+      speakDriverMessage('Job accepted. Start navigation now.', voiceGuidanceEnabled);
+    } catch {
+      Alert.alert('Could not accept offer', 'Please try again.');
+    } finally {
+      setAcceptingOffer(false);
+    }
   };
 
   const onRejectOffer = async () => {
@@ -395,8 +492,13 @@ export function HomeScreen() {
                 <Pressable
                   style={[styles.toggleButton, styles.onlineButton]}
                   onPress={() => void onAcceptOffer()}
+                  disabled={acceptingOffer}
                 >
-                  <Text style={styles.toggleButtonText}>{t('home.offer.accept')}</Text>
+                  {acceptingOffer ? (
+                    <ActivityIndicator color="#ffffff" />
+                  ) : (
+                    <Text style={styles.toggleButtonText}>{t('home.offer.accept')}</Text>
+                  )}
                 </Pressable>
                 <Pressable
                   style={[styles.toggleButton, styles.offlineButton]}
@@ -472,18 +574,77 @@ export function HomeScreen() {
 
         <View style={styles.supportCard}>
           <Text style={styles.supportTitle}>{t('home.support')}</Text>
-          <Text style={styles.supportSub}>{t('home.supportSub')}</Text>
-          <Text style={styles.supportPhone}>{SUPPORT_PHONE}</Text>
+          <Text style={styles.supportSub}>
+            Message support first. We aim to resolve in 6 hours. If unresolved in 24 hours, escalate by call.
+          </Text>
+          <Text style={styles.supportPhone}>{maskedSupportPhone}</Text>
           <View style={styles.supportActionRow}>
             <Pressable style={styles.supportActionPrimary} onPress={() => navigation.navigate('Support')}>
               <Text style={styles.supportActionPrimaryText}>Open Support Center</Text>
             </Pressable>
             <Pressable style={styles.supportActionGhost} onPress={() => void callSupport()}>
-              <Text style={styles.supportActionGhostText}>Call</Text>
+              <Text style={styles.supportActionGhostText}>Call (24h+)</Text>
             </Pressable>
           </View>
         </View>
       </ScrollView>
+      <Modal
+        animationType="slide"
+        transparent
+        visible={offerPaymentPickerVisible}
+        onRequestClose={() => setOfferPaymentPickerVisible(false)}
+      >
+        <View style={styles.offerPaymentModalBackdrop}>
+          <View style={styles.offerPaymentModalCard}>
+            <Text style={styles.offerPaymentModalTitle}>Select preferred UPI for this ride</Text>
+            <Text style={styles.offerPaymentModalSub}>
+              Customer will see this as your recommended direct payment account.
+            </Text>
+            <View style={styles.offerPaymentMethodList}>
+              {offerPaymentMethods.map((method) => {
+                const selected = method.id === selectedOfferPaymentMethodId;
+                return (
+                  <Pressable
+                    key={method.id}
+                    style={[styles.offerPaymentMethodRow, selected && styles.offerPaymentMethodRowSelected]}
+                    onPress={() => setSelectedOfferPaymentMethodId(method.id)}
+                  >
+                    <Text style={styles.offerPaymentMethodLabel}>
+                      {method.label || method.upiId}
+                      {method.isPreferred ? ' • Primary' : ''}
+                    </Text>
+                    <Text style={styles.offerPaymentMethodUpi}>{method.upiId}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={styles.offerPaymentModalActions}>
+              <Pressable
+                style={styles.offerPaymentCancelButton}
+                onPress={() => {
+                  setOfferPaymentPickerVisible(false);
+                  setOfferPaymentMethods([]);
+                  setSelectedOfferPaymentMethodId(undefined);
+                }}
+                disabled={acceptingOffer}
+              >
+                <Text style={styles.offerPaymentCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.offerPaymentConfirmButton}
+                onPress={() => void confirmOfferPaymentMethod()}
+                disabled={acceptingOffer}
+              >
+                {acceptingOffer ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text style={styles.offerPaymentConfirmText}>Accept Job</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <DeliveryProofModal
         visible={deliveryProofVisible}
         submitting={deliveryProofSubmitting}
@@ -740,5 +901,88 @@ const styles = StyleSheet.create({
     fontFamily: typography.bodyBold,
     color: '#1E3A8A',
     fontSize: 12
+  },
+  offerPaymentModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.5)',
+    justifyContent: 'center',
+    padding: spacing.md
+  },
+  offerPaymentModalCard: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#FFFFFF',
+    padding: spacing.md,
+    gap: spacing.sm
+  },
+  offerPaymentModalTitle: {
+    fontFamily: typography.bodyBold,
+    color: colors.accent,
+    fontSize: 16
+  },
+  offerPaymentModalSub: {
+    fontFamily: typography.body,
+    color: colors.mutedText,
+    fontSize: 12
+  },
+  offerPaymentMethodList: {
+    gap: 8
+  },
+  offerPaymentMethodRow: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs
+  },
+  offerPaymentMethodRowSelected: {
+    borderColor: '#0F766E',
+    backgroundColor: '#ECFDF5'
+  },
+  offerPaymentMethodLabel: {
+    fontFamily: typography.bodyBold,
+    color: colors.accent,
+    fontSize: 13
+  },
+  offerPaymentMethodUpi: {
+    marginTop: 2,
+    fontFamily: typography.body,
+    color: colors.mutedText,
+    fontSize: 12
+  },
+  offerPaymentModalActions: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.xs
+  },
+  offerPaymentCancelButton: {
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 8,
+    minWidth: 90,
+    alignItems: 'center'
+  },
+  offerPaymentCancelText: {
+    fontFamily: typography.bodyBold,
+    color: '#334155',
+    fontSize: 13
+  },
+  offerPaymentConfirmButton: {
+    borderRadius: radius.sm,
+    backgroundColor: colors.secondary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 8,
+    minWidth: 110,
+    alignItems: 'center'
+  },
+  offerPaymentConfirmText: {
+    fontFamily: typography.bodyBold,
+    color: colors.white,
+    fontSize: 13
   }
 });

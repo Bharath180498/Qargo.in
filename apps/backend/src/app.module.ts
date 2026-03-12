@@ -22,6 +22,7 @@ import { DriverOnboardingModule } from './modules/driver-onboarding/driver-onboa
 import { KycModule } from './modules/kyc/kyc.module';
 import { MapsModule } from './modules/maps/maps.module';
 import { SupportModule } from './modules/support/support.module';
+import { AppConfigModule } from './modules/app-config/app-config.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { SupportModule } from './modules/support/support.module';
     KycModule,
     SupportModule,
     MapsModule,
+    AppConfigModule,
     AdminModule,
     HealthModule
   ]

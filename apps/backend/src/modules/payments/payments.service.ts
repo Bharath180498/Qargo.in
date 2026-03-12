@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PaymentProvider, PaymentStatus } from '@prisma/client';
 import { createHmac, timingSafeEqual } from 'crypto';
@@ -518,34 +518,33 @@ export class PaymentsService {
     }
 
     if (payload.provider === PaymentProvider.UPI) {
+      if (payload.directPayToDriver) {
+        throw new BadRequestException(
+          'Direct-to-driver UPI is disabled. Customer payments are held by QARGO and settled after delivery.'
+        );
+      }
+
       const driverPaymentMethods = order.trip?.driver?.paymentMethods ?? [];
+      const tripPreferredMethod = order.trip?.driverPreferredPaymentMethodId
+        ? driverPaymentMethods.find((method) => method.id === order.trip?.driverPreferredPaymentMethodId)
+        : undefined;
       const selectedDriverMethod = payload.driverPaymentMethodId
         ? driverPaymentMethods.find((method) => method.id === payload.driverPaymentMethodId)
         : undefined;
       const preferredDriverMethod =
         selectedDriverMethod ??
+        tripPreferredMethod ??
         driverPaymentMethods.find((method) => method.isPreferred) ??
         driverPaymentMethods[0];
 
-      const driverPayeeVpa =
-        preferredDriverMethod?.upiId?.trim() ??
-        order.trip?.driver?.payoutAccount?.upiId?.trim();
-      const directPayeeVpa =
-        payload.directUpiVpa?.trim() || (payload.directPayToDriver ? driverPayeeVpa : '');
-      const resolvedPayeeVpa = directPayeeVpa || this.upiPayeeVpa || 'qargo.demo@upi';
-      const resolvedPayeeName =
-        payload.directUpiName?.trim() ||
-        (payload.directPayToDriver
-          ? preferredDriverMethod?.label?.trim() || order.trip?.driver?.user?.name?.trim()
-          : '') ||
-        this.upiPayeeName;
-      const isDirectToDriver = Boolean(payload.directPayToDriver && directPayeeVpa);
+      const resolvedPayeeVpa = this.upiPayeeVpa || 'qargo.demo@upi';
+      const resolvedPayeeName = this.upiPayeeName;
+      const isDirectToDriver = false;
       const upiIntentUrl = this.buildUpiIntent(payment.id, Number(payment.amount), {
         vpa: resolvedPayeeVpa,
-        name: resolvedPayeeName,
-        note: isDirectToDriver ? `Qargo Driver ${payment.id.slice(0, 8)}` : undefined
+        name: resolvedPayeeName
       });
-      const providerRef = `${isDirectToDriver ? 'upi_direct' : 'upi'}_${payment.id}`;
+      const providerRef = `upi_${payment.id}`;
       const updated = await this.prisma.payment.update({
         where: { id: payment.id },
         data: { providerRef }
@@ -563,8 +562,20 @@ export class PaymentsService {
           vpa: resolvedPayeeVpa,
           name: resolvedPayeeName,
           directToDriver: isDirectToDriver,
-          paymentMethodId: preferredDriverMethod?.id,
-          qrImageUrl: preferredDriverMethod?.qrImageUrl ?? undefined
+          paymentMethodId:
+            selectedDriverMethod?.id ??
+            tripPreferredMethod?.id ??
+            preferredDriverMethod?.id ??
+            order.trip?.driverPreferredPaymentMethodId ??
+            undefined,
+          qrImageUrl:
+            selectedDriverMethod?.qrImageUrl ??
+            tripPreferredMethod?.qrImageUrl ??
+            preferredDriverMethod?.qrImageUrl ??
+            order.trip?.driverPreferredUpiQrImageUrl ??
+            undefined,
+          preferredByDriver: Boolean(order.trip?.driverPreferredUpiId),
+          settlementMode: 'QARGO_ESCROW'
         },
         ...breakdown
       };

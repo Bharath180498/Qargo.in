@@ -70,6 +70,11 @@ export class AdminController {
     return this.adminService.pendingKycReview();
   }
 
+  @Get('kyc/:verificationId')
+  kycReviewDetails(@Param('verificationId') verificationId: string) {
+    return this.adminService.kycReviewDetails(verificationId);
+  }
+
   @Post('kyc/:verificationId/approve')
   approveKyc(
     @Param('verificationId') verificationId: string,

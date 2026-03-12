@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -6,6 +6,7 @@ import {
   Pressable,
   SafeAreaView,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -19,10 +20,35 @@ import { useDriverI18n } from '../../i18n/useDriverI18n';
 import { LanguageSwitcher } from '../../components/LanguageSwitcher';
 import { useDriverUxStore } from '../../store/useDriverUxStore';
 
+const UPI_PATTERN = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/i;
+
 interface PickedImage {
   uri: string;
   fileName?: string | null;
   mimeType?: string | null;
+}
+
+function normalizeUpiId(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function isValidUpiId(value: string) {
+  return UPI_PATTERN.test(value);
+}
+
+function buildUpiIntentUrl(upiId: string, payeeName: string) {
+  const params = new URLSearchParams({
+    pa: upiId,
+    pn: payeeName || 'QARGO Driver',
+    cu: 'INR',
+    tn: 'QARGO payout'
+  });
+
+  return `upi://pay?${params.toString()}`;
+}
+
+function buildDynamicQrPreviewUrl(upiIntentUrl: string) {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=600x600&format=png&data=${encodeURIComponent(upiIntentUrl)}`;
 }
 
 async function pickQrImageFromLibrary(): Promise<PickedImage | null> {
@@ -72,7 +98,6 @@ export function ProfileScreen() {
   const updateBank = useOnboardingStore((state) => state.updateBank);
   const uploadPaymentMethodQr = useOnboardingStore((state) => state.uploadPaymentMethodQr);
   const setPreferredPaymentMethod = useOnboardingStore((state) => state.setPreferredPaymentMethod);
-  const removePaymentMethod = useOnboardingStore((state) => state.removePaymentMethod);
   const onboardingLoading = useOnboardingStore((state) => state.loading);
   const accountHolderName = useOnboardingStore((state) => state.accountHolderName);
   const bankName = useOnboardingStore((state) => state.bankName);
@@ -87,8 +112,10 @@ export function ProfileScreen() {
   const setVoiceGuidanceEnabled = useDriverUxStore((state) => state.setVoiceGuidanceEnabled);
   const guidedHintsEnabled = useDriverUxStore((state) => state.guidedHintsEnabled);
   const setGuidedHintsEnabled = useDriverUxStore((state) => state.setGuidedHintsEnabled);
+
   const [upiId, setUpiId] = useState('');
   const [savingPayout, setSavingPayout] = useState(false);
+  const [showWalletMore, setShowWalletMore] = useState(false);
 
   useEffect(() => {
     void Promise.all([refreshOnboardingStatus(), bootstrap(), loadOnboarding()]);
@@ -98,16 +125,38 @@ export function ProfileScreen() {
     setUpiId(onboardingUpiId);
   }, [onboardingUpiId]);
 
-  const savePayoutPreferences = async () => {
-    const normalizedUpi = upiId.trim().toLowerCase();
-    const upiPattern = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/i;
+  const preferredPaymentMethod = useMemo(
+    () => paymentMethods.find((method) => method.isPreferred) ?? paymentMethods[0],
+    [paymentMethods]
+  );
 
+  const normalizedUpi = useMemo(() => normalizeUpiId(upiId), [upiId]);
+  const activeUpi = normalizedUpi || preferredPaymentMethod?.upiId || '';
+
+  const upiIntentUrl = useMemo(() => {
+    if (!activeUpi || !isValidUpiId(activeUpi)) {
+      return '';
+    }
+
+    const payeeName = user?.name?.trim() || accountHolderName.trim() || 'QARGO Driver';
+    return buildUpiIntentUrl(activeUpi, payeeName);
+  }, [accountHolderName, activeUpi, user?.name]);
+  const upiReady = Boolean(upiIntentUrl);
+
+  const dynamicQrPreviewUrl = useMemo(() => {
+    if (!upiIntentUrl) {
+      return '';
+    }
+    return buildDynamicQrPreviewUrl(upiIntentUrl);
+  }, [upiIntentUrl]);
+
+  const savePayoutPreferences = async () => {
     if (!accountHolderName || !bankName || !accountNumber || !ifscCode) {
       Alert.alert('Bank details missing', 'Complete payout bank setup first, then add UPI preferences.');
       return;
     }
 
-    if (!normalizedUpi || !upiPattern.test(normalizedUpi)) {
+    if (!normalizedUpi || !isValidUpiId(normalizedUpi)) {
       Alert.alert('Invalid UPI', 'Enter a valid UPI ID (example: driver@okaxis).');
       return;
     }
@@ -121,7 +170,7 @@ export function ProfileScreen() {
         ifscCode,
         upiId: normalizedUpi
       });
-      Alert.alert('Saved', 'Payout UPI preferences updated.');
+      Alert.alert('Saved', 'Payout wallet updated. Dynamic UPI link is now ready.');
     } catch {
       Alert.alert('Save failed', useOnboardingStore.getState().error ?? 'Unable to save payout details.');
     } finally {
@@ -130,10 +179,7 @@ export function ProfileScreen() {
   };
 
   const addQrCode = async () => {
-    const normalizedUpi = upiId.trim().toLowerCase();
-    const upiPattern = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/i;
-
-    if (!normalizedUpi || !upiPattern.test(normalizedUpi)) {
+    if (!normalizedUpi || !isValidUpiId(normalizedUpi)) {
       Alert.alert('Set UPI ID', 'Enter valid UPI ID before uploading a QR code.');
       return;
     }
@@ -161,6 +207,22 @@ export function ProfileScreen() {
       });
     } catch {
       Alert.alert('QR upload failed', useOnboardingStore.getState().error ?? 'Please try again.');
+    }
+  };
+
+  const shareDynamicUpiLink = async () => {
+    if (!upiIntentUrl) {
+      Alert.alert('UPI required', 'Add a valid UPI ID first to generate the dynamic payment link.');
+      return;
+    }
+
+    try {
+      await Share.share({
+        title: 'Driver UPI Link',
+        message: `Pay driver directly via UPI: ${upiIntentUrl}`
+      });
+    } catch {
+      Alert.alert('Share failed', 'Could not share UPI link right now.');
     }
   };
 
@@ -223,62 +285,95 @@ export function ProfileScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Payout Preferences</Text>
-          <Text style={styles.fieldLabel}>UPI ID</Text>
+          <Text style={styles.sectionTitle}>Payout Wallet</Text>
+
+          <View style={styles.walletHero}>
+            <Text style={styles.walletHeroLabel}>QARGO Wallet</Text>
+            <Text style={styles.walletHeroTitle}>Receive money to this UPI</Text>
+            <Text style={styles.walletPrimaryValue}>{activeUpi || 'Not set yet'}</Text>
+            <Text style={styles.walletHeroSubtitle}>
+              After you accept a ride, customer sees this UPI first.
+            </Text>
+            <View style={styles.walletStatsRow}>
+              <View style={styles.walletStat}>
+                <Text style={styles.walletStatValue}>{preferredPaymentMethod ? 'Active' : 'Pending'}</Text>
+                <Text style={styles.walletStatLabel}>Status</Text>
+              </View>
+              <View style={styles.walletStat}>
+                <Text style={styles.walletStatValue}>{paymentMethods.length}</Text>
+                <Text style={styles.walletStatLabel}>Saved IDs</Text>
+              </View>
+            </View>
+          </View>
+
+          <Text style={styles.fieldLabel}>Your UPI ID</Text>
           <TextInput
             style={styles.input}
             value={upiId}
-            onChangeText={setUpiId}
+            onChangeText={(value) => {
+              setUpiId(value);
+            }}
             autoCapitalize="none"
             placeholder="driver@okaxis"
             placeholderTextColor={colors.mutedText}
           />
-          <Text style={styles.helperText}>Add one or more QR codes and mark one preferred for customer checkout.</Text>
+          <Text style={styles.helperText}>Example: name@okaxis</Text>
+
           {onboardingLoading ? <ActivityIndicator color={colors.primary} /> : null}
           {onboardingError ? <Text style={styles.errorText}>{onboardingError}</Text> : null}
 
-          <Pressable style={styles.secondaryButton} onPress={() => void addQrCode()} disabled={savingPayout}>
-            <Text style={styles.secondaryText}>Upload QR Code</Text>
-          </Pressable>
+          <View style={styles.walletActionGrid}>
+            <Pressable style={styles.walletPrimaryButton} onPress={() => void savePayoutPreferences()} disabled={savingPayout}>
+              {savingPayout ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <Text style={styles.walletPrimaryButtonText}>Use this UPI for rides</Text>
+              )}
+            </Pressable>
 
-          <View style={styles.methodList}>
-            {paymentMethods.length === 0 ? (
-              <Text style={styles.helperText}>No QR codes uploaded yet.</Text>
-            ) : (
-              paymentMethods.map((method) => (
-                <View key={method.id} style={[styles.methodCard, method.isPreferred && styles.methodCardPreferred]}>
-                  <View style={styles.methodTopRow}>
-                    <View>
-                      <Text style={styles.methodTitle}>{method.label ?? 'UPI QR'}</Text>
-                      <Text style={styles.methodSubtitle}>{method.upiId}</Text>
-                    </View>
-                    {method.isPreferred ? <Text style={styles.preferredBadge}>Preferred</Text> : null}
-                  </View>
-                  {method.qrImageUrl ? <Image source={{ uri: method.qrImageUrl }} style={styles.qrPreview} /> : null}
-                  <View style={styles.methodActions}>
-                    {!method.isPreferred ? (
-                      <Pressable
-                        style={styles.actionButton}
-                        onPress={() => void setPreferredPaymentMethod(method.id)}
-                      >
-                        <Text style={styles.actionText}>Set preferred</Text>
-                      </Pressable>
-                    ) : null}
-                    <Pressable
-                      style={[styles.actionButton, styles.actionDanger]}
-                      onPress={() => void removePaymentMethod(method.id)}
-                    >
-                      <Text style={[styles.actionText, styles.actionDangerText]}>Remove</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ))
-            )}
+            <Pressable style={styles.walletMoreButton} onPress={() => setShowWalletMore((previous) => !previous)}>
+              <Text style={styles.walletMoreButtonText}>{showWalletMore ? 'Hide extras' : 'More options'}</Text>
+            </Pressable>
           </View>
 
-          <Pressable style={styles.secondaryButton} onPress={() => void savePayoutPreferences()} disabled={savingPayout}>
-            {savingPayout ? <ActivityIndicator color={colors.secondary} /> : <Text style={styles.secondaryText}>Save Payout Preferences</Text>}
-          </Pressable>
+          {upiReady && dynamicQrPreviewUrl ? (
+            <View style={styles.dynamicQrCard}>
+              <Text style={styles.dynamicQrTitle}>Live UPI QR</Text>
+              <Text style={styles.helperText}>Show this if customer wants to pay directly.</Text>
+              <Image source={{ uri: dynamicQrPreviewUrl }} style={styles.dynamicQrPreview} />
+            </View>
+          ) : null}
+
+          {showWalletMore ? (
+            <View style={styles.methodList}>
+              <Pressable style={styles.secondaryButton} onPress={() => void addQrCode()} disabled={savingPayout}>
+                <Text style={styles.secondaryText}>Upload QR Screenshot (optional)</Text>
+              </Pressable>
+
+              <Pressable style={styles.secondaryButton} onPress={() => void shareDynamicUpiLink()} disabled={!upiReady}>
+                <Text style={styles.secondaryText}>Share UPI Link</Text>
+              </Pressable>
+
+              {paymentMethods.length === 0 ? (
+                <Text style={styles.helperText}>No extra UPI IDs saved yet.</Text>
+              ) : (
+                paymentMethods.map((method) => (
+                  <Pressable
+                    key={method.id}
+                    style={[styles.methodSimpleCard, method.isPreferred && styles.methodSimpleCardActive]}
+                    onPress={() => {
+                      if (!method.isPreferred) {
+                        void setPreferredPaymentMethod(method.id);
+                      }
+                    }}
+                  >
+                    <Text style={styles.methodTitle}>{method.upiId}</Text>
+                    <Text style={styles.methodSubtitle}>{method.isPreferred ? 'Active UPI' : 'Tap to make active'}</Text>
+                  </Pressable>
+                ))
+              )}
+            </View>
+          ) : null}
         </View>
 
         <Pressable
@@ -377,26 +472,130 @@ const styles = StyleSheet.create({
   preferenceToggleTextActive: {
     color: colors.secondary
   },
-  methodList: {
+  walletHero: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#0B1220',
+    padding: spacing.md,
+    gap: spacing.xs,
+    marginBottom: spacing.xs,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.22,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 16,
+    elevation: 3
+  },
+  walletHeroLabel: {
+    fontFamily: typography.bodyBold,
+    color: '#93C5FD',
+    fontSize: 11,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase'
+  },
+  walletHeroTitle: {
+    fontFamily: typography.bodyBold,
+    color: '#E2E8F0',
+    fontSize: 15
+  },
+  walletPrimaryValue: {
+    fontFamily: typography.heading,
+    color: '#7DD3FC',
+    fontSize: 22
+  },
+  walletHeroSubtitle: {
+    fontFamily: typography.body,
+    color: '#CBD5E1',
+    fontSize: 12,
+    lineHeight: 18
+  },
+  walletStatsRow: {
+    flexDirection: 'row',
+    gap: spacing.xs
+  },
+  walletStat: {
+    flex: 1,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#172033',
+    padding: spacing.xs
+  },
+  walletStatValue: {
+    fontFamily: typography.bodyBold,
+    color: '#E2E8F0',
+    fontSize: 13
+  },
+  walletStatLabel: {
+    fontFamily: typography.body,
+    color: '#94A3B8',
+    fontSize: 11
+  },
+  walletActionGrid: {
     gap: spacing.xs,
     marginTop: spacing.xs
   },
-  methodCard: {
+  walletPrimaryButton: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#0EA5E9',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    backgroundColor: '#0EA5E9'
+  },
+  walletPrimaryButtonText: {
+    fontFamily: typography.bodyBold,
+    color: colors.white
+  },
+  walletMoreButton: {
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: '#334155',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    backgroundColor: '#F8FAFC'
+  },
+  walletMoreButtonText: {
+    fontFamily: typography.bodyBold,
+    color: '#334155'
+  },
+  dynamicQrCard: {
+    marginTop: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    padding: spacing.sm,
+    gap: spacing.xs,
+    alignItems: 'center'
+  },
+  dynamicQrTitle: {
+    fontFamily: typography.bodyBold,
+    color: '#0C4A6E',
+    fontSize: 14
+  },
+  dynamicQrPreview: {
+    width: 180,
+    height: 180,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#6EE7B7',
+    backgroundColor: colors.white
+  },
+  methodList: {
+    gap: spacing.xs,
+    marginTop: spacing.sm
+  },
+  methodSimpleCard: {
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.sm,
-    gap: spacing.xs,
     backgroundColor: colors.paper
   },
-  methodCardPreferred: {
-    borderColor: '#0F766E',
-    backgroundColor: '#ECFDF5'
-  },
-  methodTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between'
+  methodSimpleCardActive: {
+    borderColor: '#0EA5E9',
+    backgroundColor: '#F0F9FF'
   },
   methodTitle: {
     fontFamily: typography.bodyBold,
@@ -408,58 +607,17 @@ const styles = StyleSheet.create({
     color: colors.mutedText,
     fontSize: 12
   },
-  preferredBadge: {
-    fontFamily: typography.bodyBold,
-    fontSize: 11,
-    color: '#0F766E',
-    backgroundColor: '#CCFBF1',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999
-  },
-  qrPreview: {
-    width: 120,
-    height: 120,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white
-  },
-  methodActions: {
-    flexDirection: 'row',
-    gap: spacing.xs
-  },
-  actionButton: {
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: '#93C5FD',
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs
-  },
-  actionDanger: {
-    borderColor: '#FCA5A5',
-    backgroundColor: '#FEF2F2'
-  },
-  actionText: {
-    fontFamily: typography.bodyBold,
-    color: '#1D4ED8',
-    fontSize: 12
-  },
-  actionDangerText: {
-    color: '#B91C1C'
-  },
   secondaryButton: {
     borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: colors.secondary,
+    borderColor: '#BFDBFE',
     alignItems: 'center',
     paddingVertical: spacing.sm,
-    backgroundColor: '#ECFDF5'
+    backgroundColor: '#EFF6FF'
   },
   secondaryText: {
     fontFamily: typography.bodyBold,
-    color: colors.secondary
+    color: '#0369A1'
   },
   logoutButton: {
     borderRadius: radius.sm,

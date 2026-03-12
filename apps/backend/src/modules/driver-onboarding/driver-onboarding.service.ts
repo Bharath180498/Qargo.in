@@ -16,6 +16,7 @@ import { UpsertDriverVehicleDto } from './dto/upsert-vehicle.dto';
 import { UpsertDriverBankDto } from './dto/upsert-bank.dto';
 import { GeneratePaymentUploadUrlDto } from './dto/generate-payment-upload-url.dto';
 import { CreateDriverPaymentMethodDto } from './dto/create-driver-payment-method.dto';
+import { buildS3UploadUrl } from '../../common/utils/s3-upload.util';
 
 @Injectable()
 export class DriverOnboardingService {
@@ -171,14 +172,29 @@ export class DriverOnboardingService {
   async generatePaymentMethodUploadUrl(payload: GeneratePaymentUploadUrlDto) {
     await this.ensureUser(payload.userId);
 
-    const endpoint = this.configService.get<string>('s3.endpoint') ?? '';
-    const bucket = this.configService.get<string>('s3.bucket') ?? '';
+    const endpoint = (this.configService.get<string>('s3.endpoint') ?? '').trim();
+    const accessKeyId = (this.configService.get<string>('s3.accessKeyId') ?? '').trim();
+    const secretAccessKey = (this.configService.get<string>('s3.secretAccessKey') ?? '').trim();
+    const bucket = (this.configService.get<string>('s3.bucket') ?? '').trim();
     const region = this.configService.get<string>('s3.region') ?? 'auto';
     const contentType = payload.contentType?.trim() || 'image/jpeg';
     const safeFileName = payload.fileName.trim().replace(/[^a-zA-Z0-9._-]/g, '_');
     const fileKey = `payments/${payload.userId}/upi-qr-${Date.now()}-${safeFileName}`;
+    const signedUpload = await buildS3UploadUrl(
+      {
+        endpoint,
+        region,
+        bucket,
+        accessKeyId,
+        secretAccessKey
+      },
+      {
+        fileKey,
+        contentType
+      }
+    );
 
-    if (!endpoint || !bucket) {
+    if (!signedUpload) {
       return {
         fileKey,
         uploadUrl: `mock://upload/${fileKey}`,
@@ -188,12 +204,11 @@ export class DriverOnboardingService {
       };
     }
 
-    const base = endpoint.replace(/\/$/, '');
     return {
       fileKey,
-      uploadUrl: `${base}/${bucket}/${fileKey}?signed=mock-signature`,
-      fileUrl: `${base}/${bucket}/${fileKey}`,
-      mode: `s3-${region}`,
+      uploadUrl: signedUpload.uploadUrl,
+      fileUrl: signedUpload.fileUrl,
+      mode: signedUpload.mode,
       contentType
     };
   }

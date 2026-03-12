@@ -110,7 +110,7 @@ interface DriverAppState {
   ) => Promise<UpdateSubscriptionResult>;
   setAvailability: (next: 'ONLINE' | 'OFFLINE') => Promise<void>;
   updateLocation: (lat: number, lng: number, orderId?: string) => Promise<void>;
-  acceptOffer: (offerId: string) => Promise<void>;
+  acceptOffer: (offerId: string, driverPaymentMethodId?: string) => Promise<void>;
   rejectOffer: (offerId: string) => Promise<void>;
   runTripAction: (tripId: string, endpoint: string, payload?: Record<string, unknown>) => Promise<void>;
   completeTripWithDeliveryProof: (tripId: string, payload: DeliveryProofPayload) => Promise<void>;
@@ -287,14 +287,15 @@ export const useDriverAppStore = create<DriverAppState>((set, get) => ({
       timestamp: new Date().toISOString()
     });
   },
-  async acceptOffer(offerId) {
+  async acceptOffer(offerId, driverPaymentMethodId) {
     const driverProfileId = get().driverProfileId;
     if (!driverProfileId) {
       return;
     }
 
     await api.post(`/dispatch/offers/${offerId}/accept`, {
-      driverId: driverProfileId
+      driverId: driverProfileId,
+      driverPaymentMethodId
     });
 
     await get().refreshJobs();

@@ -4,6 +4,7 @@ import { ReactNode, useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { NavShell } from '../../components/nav-shell';
 import { fetcher, postJson } from '../../lib/api';
+import { mergeQargoAiContext } from '../../lib/qargo-ai-context';
 
 interface PendingKyc {
   id: string;
@@ -286,6 +287,13 @@ export default function KycReviewsPage() {
 
     setRejectReason(details.verification.reviewNotes ?? 'Documents did not pass manual review');
   }, [details?.verification.id]);
+
+  useEffect(() => {
+    mergeQargoAiContext({
+      pagePath: '/kyc',
+      kycVerificationId: selectedVerificationId
+    });
+  }, [selectedVerificationId]);
 
   const approve = async (verificationId: string) => {
     setActionError(undefined);

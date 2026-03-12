@@ -122,6 +122,22 @@ npm run railway:configure-vars -- \
 railway up --service backend --detach
 ```
 
+### Cashfree SecureID Railway command
+
+```bash
+npm run railway:configure-vars -- \
+  --backend-service backend \
+  --postgres-service Postgres \
+  --redis-service Redis \
+  --skip-admin \
+  --kyc-provider cashfree \
+  --cashfree-client-id 'YOUR_CASHFREE_CLIENT_ID' \
+  --cashfree-client-secret 'YOUR_CASHFREE_CLIENT_SECRET' \
+  --cashfree-kyc-api-url 'YOUR_SECUREID_KYC_ENDPOINT' \
+  --cashfree-api-version '2023-08-01'
+railway up --service backend --detach
+```
+
 ## 5) Release readiness gates before production
 
 1. Run the two-phone scenario for at least 20 bookings.

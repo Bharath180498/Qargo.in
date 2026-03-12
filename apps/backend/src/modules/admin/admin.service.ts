@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   AvailabilityStatus,
   InsurancePlan,
@@ -520,6 +520,111 @@ export class AdminService {
         rating: true
       }
     });
+  }
+
+  async operationsOrderDetail(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            email: true,
+            role: true
+          }
+        },
+        trip: {
+          include: {
+            driver: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    phone: true,
+                    email: true,
+                    rating: true
+                  }
+                }
+              }
+            }
+          }
+        },
+        payment: true,
+        supportTickets: {
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: {
+            id: true,
+            subject: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true
+          }
+        }
+      }
+    });
+
+    if (!order) {
+      throw new NotFoundException(`Order not found: ${orderId}`);
+    }
+
+    return order;
+  }
+
+  async operationsRideDetail(tripId: string) {
+    const trip = await this.prisma.trip.findUnique({
+      where: { id: tripId },
+      include: {
+        order: {
+          include: {
+            customer: {
+              select: {
+                id: true,
+                name: true,
+                phone: true,
+                email: true
+              }
+            },
+            payment: true
+          }
+        },
+        driver: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                phone: true,
+                email: true,
+                rating: true
+              }
+            }
+          }
+        },
+        deliveryProof: true,
+        rating: true,
+        supportTickets: {
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+          select: {
+            id: true,
+            subject: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true
+          }
+        }
+      }
+    });
+
+    if (!trip) {
+      throw new NotFoundException(`Trip not found: ${tripId}`);
+    }
+
+    return trip;
   }
 
   pendingKycReview() {

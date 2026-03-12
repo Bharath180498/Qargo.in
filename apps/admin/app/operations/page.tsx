@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { NavShell } from '../../components/nav-shell';
 import { fetcher } from '../../lib/api';
+import { mergeQargoAiContext } from '../../lib/qargo-ai-context';
 
 type Scope = 'active' | 'recent' | 'all';
 
@@ -322,6 +323,13 @@ export default function OperationsPage() {
   const [bookingScope, setBookingScope] = useState<Scope>('active');
   const [rideScope, setRideScope] = useState<Scope>('active');
   const [selectedOrderId, setSelectedOrderId] = useState<string>();
+
+  useEffect(() => {
+    mergeQargoAiContext({
+      pagePath: '/operations',
+      orderId: selectedOrderId
+    });
+  }, [selectedOrderId]);
 
   const bookingsPath = useMemo(
     () => queryPath('/admin/operations/bookings', { scope: bookingScope, limit: '80' }),

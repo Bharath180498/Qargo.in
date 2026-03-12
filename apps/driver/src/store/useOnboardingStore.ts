@@ -46,6 +46,11 @@ interface OnboardingState {
     label?: string;
     isPreferred?: boolean;
   }) => Promise<void>;
+  addPaymentMethod: (payload: {
+    upiId: string;
+    label?: string;
+    isPreferred?: boolean;
+  }) => Promise<void>;
   setPreferredPaymentMethod: (methodId: string) => Promise<void>;
   removePaymentMethod: (methodId: string) => Promise<void>;
   submit: () => Promise<void>;
@@ -384,6 +389,35 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
       set({
         loading: false,
         error: extractErrorMessage(error, 'QR upload failed')
+      });
+      throw error;
+    }
+  },
+  async addPaymentMethod(payload) {
+    const userId = currentUserId();
+    const normalizedUpi = payload.upiId.trim().toLowerCase();
+    const upiPattern = /^[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}$/i;
+
+    if (!normalizedUpi || !upiPattern.test(normalizedUpi)) {
+      throw new Error('Set a valid UPI ID (example: name@bank).');
+    }
+
+    set({ loading: true, error: undefined });
+
+    try {
+      await api.post('/driver-onboarding/payment-methods', {
+        userId,
+        type: 'UPI_VPA',
+        upiId: normalizedUpi,
+        label: payload.label?.trim() || undefined,
+        isPreferred: payload.isPreferred
+      });
+
+      await get().load();
+    } catch (error: unknown) {
+      set({
+        loading: false,
+        error: extractErrorMessage(error, 'Could not add payment method')
       });
       throw error;
     }

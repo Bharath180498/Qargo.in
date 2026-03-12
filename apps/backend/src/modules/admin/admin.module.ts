@@ -8,6 +8,7 @@ import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
 @Module({
   imports: [KycModule, AuthModule],
   controllers: [AdminController],
-  providers: [AdminService, AdminAuthGuard]
+  providers: [AdminService, AdminAuthGuard],
+  exports: [AdminService]
 })
 export class AdminModule {}

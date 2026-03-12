@@ -133,6 +133,37 @@ class EnvSchema {
   GOOGLE_TRANSLATE_API_URL?: string;
 
   @IsOptional()
+  @IsString()
+  OPENAI_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  QARGO_AI_ENABLED?: string;
+
+  @IsOptional()
+  @IsString()
+  QARGO_AI_MODEL_DEFAULT?: string;
+
+  @IsOptional()
+  @IsString()
+  QARGO_AI_MODEL_COMPLEX?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  QARGO_AI_MAX_TOOL_CALLS_PER_RUN?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(256)
+  QARGO_AI_MAX_TOKENS_PER_RUN?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  QARGO_AI_MAX_RUNS_PER_MINUTE?: number;
+
+  @IsOptional()
   @IsInt()
   @Min(60)
   OTP_TTL_SECONDS?: number;

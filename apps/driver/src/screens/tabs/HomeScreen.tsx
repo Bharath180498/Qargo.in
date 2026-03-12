@@ -391,16 +391,9 @@ export function HomeScreen() {
             .filter((method) => method !== null) as OfferPaymentMethod[])
         : [];
 
-      if (methods.length <= 1) {
-        await acceptOffer(activeOffer.id, methods[0]?.id);
-        speakDriverMessage('Job accepted. Start navigation now.', voiceGuidanceEnabled);
-        return;
-      }
-
       const preferred = methods.find((method) => method.isPreferred) ?? methods[0];
-      setOfferPaymentMethods(methods);
-      setSelectedOfferPaymentMethodId(preferred?.id);
-      setOfferPaymentPickerVisible(true);
+      await acceptOffer(activeOffer.id, preferred?.id);
+      speakDriverMessage('Job accepted. Start navigation now.', voiceGuidanceEnabled);
     } catch {
       await acceptOffer(activeOffer.id);
       speakDriverMessage('Job accepted. Start navigation now.', voiceGuidanceEnabled);

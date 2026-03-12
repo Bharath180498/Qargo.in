@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { NavShell } from '../../components/nav-shell';
 import { fetcher, postJson } from '../../lib/api';
+import { mergeQargoAiContext } from '../../lib/qargo-ai-context';
 
 type SupportTicketStatus = 'OPEN' | 'IN_PROGRESS' | 'WAITING_FOR_USER' | 'RESOLVED';
 type UserRole = 'CUSTOMER' | 'DRIVER' | 'ADMIN';
@@ -172,6 +173,13 @@ export default function SupportInboxPage() {
       setSelectedTicketId(tickets[0]?.id);
     }
   }, [selectedTicketId, tickets]);
+
+  useEffect(() => {
+    mergeQargoAiContext({
+      pagePath: '/support',
+      supportTicketId: selectedTicketId
+    });
+  }, [selectedTicketId]);
 
   const {
     data: selectedTicket,

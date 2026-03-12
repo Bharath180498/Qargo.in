@@ -169,6 +169,38 @@ enum SupportMessageSenderType {
   SYSTEM
 }
 
+enum AgentMessageRole {
+  ADMIN
+  ASSISTANT
+  SYSTEM
+}
+
+enum AgentRunStatus {
+  RUNNING
+  WAITING_CONFIRMATION
+  COMPLETED
+  FAILED
+}
+
+enum AgentActionType {
+  READ
+  WRITE
+}
+
+enum AgentActionStatus {
+  PROPOSED
+  CONFIRMED
+  EXECUTED
+  REJECTED
+  FAILED
+}
+
+enum AgentRiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
 model User {
   id           String         @id @default(uuid())
   name         String
@@ -192,6 +224,11 @@ model User {
   supportTicketsRequested SupportTicket[] @relation("SupportTicketsRequested")
   supportMessagesSent SupportTicketMessage[] @relation("SupportMessagesSent")
   customerPushTokens CustomerPushToken[]
+  adminAgentSessions AgentSession[] @relation("AdminAgentSessions")
+  adminAgentMessages AgentMessage[] @relation("AdminAgentMessages")
+  adminAgentRuns AgentRun[] @relation("AdminAgentRuns")
+  adminAgentActions AgentAction[] @relation("AdminAgentActions")
+  confirmedAgentActions AgentAction[] @relation("AdminAgentActionConfirmations")
 }
 
 model DriverProfile {
@@ -415,6 +452,99 @@ model SupportTicketMessageAttachment {
   message       SupportTicketMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@index([messageId, createdAt])
+}
+
+model AgentSession {
+  id            String       @id @default(uuid())
+  adminUserId   String
+  title         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  lastActiveAt  DateTime     @default(now())
+
+  adminUser     User         @relation("AdminAgentSessions", fields: [adminUserId], references: [id], onDelete: Cascade)
+  messages      AgentMessage[]
+  runs          AgentRun[]
+  actions       AgentAction[]
+
+  @@index([adminUserId, updatedAt])
+}
+
+model AgentMessage {
+  id            String          @id @default(uuid())
+  sessionId     String
+  runId         String?
+  adminUserId   String?
+  role          AgentMessageRole
+  content       String
+  context       Json?
+  createdAt     DateTime        @default(now())
+
+  session       AgentSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  run           AgentRun?       @relation(fields: [runId], references: [id], onDelete: SetNull)
+  adminUser     User?           @relation("AdminAgentMessages", fields: [adminUserId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, createdAt])
+  @@index([adminUserId, createdAt])
+  @@index([runId, createdAt])
+}
+
+model AgentRun {
+  id               String          @id @default(uuid())
+  sessionId        String
+  adminUserId      String
+  status           AgentRunStatus  @default(RUNNING)
+  model            String?
+  promptTokens     Int?
+  completionTokens Int?
+  totalTokens      Int?
+  toolCallsCount   Int             @default(0)
+  errorMessage     String?
+  trace            Json?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  completedAt      DateTime?
+
+  session          AgentSession    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  adminUser        User            @relation("AdminAgentRuns", fields: [adminUserId], references: [id], onDelete: Cascade)
+  messages         AgentMessage[]
+  actions          AgentAction[]
+
+  @@index([sessionId, createdAt])
+  @@index([adminUserId, createdAt])
+  @@index([status, createdAt])
+}
+
+model AgentAction {
+  id                 String           @id @default(uuid())
+  sessionId          String
+  runId              String
+  adminUserId        String
+  confirmedByAdminId String?
+  toolName           String
+  actionType         AgentActionType
+  status             AgentActionStatus @default(PROPOSED)
+  riskLevel          AgentRiskLevel   @default(MEDIUM)
+  requiresConfirmation Boolean        @default(true)
+  argsJson           Json
+  argsSummary        String?
+  resultJson         Json?
+  errorMessage       String?
+  rejectionReason    String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  confirmedAt        DateTime?
+  executedAt         DateTime?
+  rejectedAt         DateTime?
+
+  session            AgentSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  run                AgentRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  adminUser          User             @relation("AdminAgentActions", fields: [adminUserId], references: [id], onDelete: Cascade)
+  confirmedByAdmin   User?            @relation("AdminAgentActionConfirmations", fields: [confirmedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([runId, status])
+  @@index([sessionId, createdAt])
+  @@index([adminUserId, createdAt])
 }
 
 model OtpSession {

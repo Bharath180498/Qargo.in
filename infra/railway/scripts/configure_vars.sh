@@ -16,7 +16,7 @@ IDFY_API_URL_INPUT="${IDFY_API_URL:-https://api.idfy.com/v3/tasks}"
 IDFY_ACCOUNT_ID_INPUT="${IDFY_ACCOUNT_ID:-}"
 CASHFREE_CLIENT_ID_INPUT="${CASHFREE_CLIENT_ID:-}"
 CASHFREE_CLIENT_SECRET_INPUT="${CASHFREE_CLIENT_SECRET:-}"
-CASHFREE_KYC_API_URL_INPUT="${CASHFREE_KYC_API_URL:-https://api.cashfree.com/verification/v1}"
+CASHFREE_KYC_API_URL_INPUT="${CASHFREE_KYC_API_URL:-https://api.cashfree.com/verification}"
 CASHFREE_API_VERSION_INPUT="${CASHFREE_API_VERSION:-2023-08-01}"
 CASHFREE_PAYMENTS_API_URL_INPUT="${CASHFREE_PAYMENTS_API_URL:-https://api.cashfree.com/pg/orders}"
 CASHFREE_WEBHOOK_SECRET_INPUT="${CASHFREE_WEBHOOK_SECRET:-}"
@@ -44,6 +44,13 @@ SUPPORT_TRANSLATION_ENABLED_INPUT="${SUPPORT_TRANSLATION_ENABLED:-false}"
 SUPPORT_TRANSLATION_TARGET_LANGUAGE_INPUT="${SUPPORT_TRANSLATION_TARGET_LANGUAGE:-en}"
 GOOGLE_TRANSLATE_API_KEY_INPUT="${GOOGLE_TRANSLATE_API_KEY:-}"
 GOOGLE_TRANSLATE_API_URL_INPUT="${GOOGLE_TRANSLATE_API_URL:-https://translation.googleapis.com/language/translate/v2}"
+QARGO_AI_ENABLED_INPUT="${QARGO_AI_ENABLED:-false}"
+OPENAI_API_KEY_INPUT="${OPENAI_API_KEY:-}"
+QARGO_AI_MODEL_DEFAULT_INPUT="${QARGO_AI_MODEL_DEFAULT:-gpt-4o-mini}"
+QARGO_AI_MODEL_COMPLEX_INPUT="${QARGO_AI_MODEL_COMPLEX:-gpt-4.1}"
+QARGO_AI_MAX_TOOL_CALLS_PER_RUN_INPUT="${QARGO_AI_MAX_TOOL_CALLS_PER_RUN:-8}"
+QARGO_AI_MAX_TOKENS_PER_RUN_INPUT="${QARGO_AI_MAX_TOKENS_PER_RUN:-4000}"
+QARGO_AI_MAX_RUNS_PER_MINUTE_INPUT="${QARGO_AI_MAX_RUNS_PER_MINUTE:-12}"
 S3_ENDPOINT_INPUT="${S3_ENDPOINT:-}"
 S3_REGION_INPUT="${S3_REGION:-ap-south-1}"
 S3_BUCKET_INPUT="${S3_BUCKET:-}"
@@ -71,7 +78,7 @@ Usage:
     [--idfy-account-id your-account-id] \
     [--cashfree-client-id your-client-id] \
     [--cashfree-client-secret your-client-secret] \
-    [--cashfree-kyc-api-url https://api.cashfree.com/verification/...] \
+    [--cashfree-kyc-api-url https://api.cashfree.com/verification] \
     [--cashfree-api-version 2023-08-01] \
     [--cashfree-payments-api-url https://api.cashfree.com/pg/orders] \
     [--cashfree-webhook-secret your-webhook-secret] \
@@ -99,6 +106,13 @@ Usage:
     [--support-translation-target-language en] \
     [--google-translate-api-key your-key] \
     [--google-translate-api-url https://translation.googleapis.com/language/translate/v2] \
+    [--qargo-ai-enabled true|false] \
+    [--openai-api-key your-openai-key] \
+    [--qargo-ai-model-default gpt-4o-mini] \
+    [--qargo-ai-model-complex gpt-4.1] \
+    [--qargo-ai-max-tool-calls-per-run 8] \
+    [--qargo-ai-max-tokens-per-run 4000] \
+    [--qargo-ai-max-runs-per-minute 12] \
     [--s3-endpoint https://s3.ap-south-1.amazonaws.com] \
     [--s3-region ap-south-1] \
     [--s3-bucket qargo-prod-assets] \
@@ -345,6 +359,34 @@ while [[ $# -gt 0 ]]; do
       GOOGLE_TRANSLATE_API_URL_INPUT="$2"
       shift 2
       ;;
+    --qargo-ai-enabled)
+      QARGO_AI_ENABLED_INPUT="$2"
+      shift 2
+      ;;
+    --openai-api-key)
+      OPENAI_API_KEY_INPUT="$2"
+      shift 2
+      ;;
+    --qargo-ai-model-default)
+      QARGO_AI_MODEL_DEFAULT_INPUT="$2"
+      shift 2
+      ;;
+    --qargo-ai-model-complex)
+      QARGO_AI_MODEL_COMPLEX_INPUT="$2"
+      shift 2
+      ;;
+    --qargo-ai-max-tool-calls-per-run)
+      QARGO_AI_MAX_TOOL_CALLS_PER_RUN_INPUT="$2"
+      shift 2
+      ;;
+    --qargo-ai-max-tokens-per-run)
+      QARGO_AI_MAX_TOKENS_PER_RUN_INPUT="$2"
+      shift 2
+      ;;
+    --qargo-ai-max-runs-per-minute)
+      QARGO_AI_MAX_RUNS_PER_MINUTE_INPUT="$2"
+      shift 2
+      ;;
     --s3-endpoint)
       S3_ENDPOINT_INPUT="$2"
       shift 2
@@ -434,6 +476,7 @@ validate_choice "KYC_PROVIDER" "$KYC_PROVIDER_VALUE" "mock" "idfy" "cashfree" "q
 validate_choice "PUSH_PROVIDER" "$PUSH_PROVIDER_VALUE" "mock" "expo" "fcm"
 validate_choice "OTP_PROVIDER" "$OTP_PROVIDER_VALUE" "mock" "twilio"
 validate_choice "SUPPORT_TRANSLATION_ENABLED" "$SUPPORT_TRANSLATION_ENABLED_INPUT" "true" "false"
+validate_choice "QARGO_AI_ENABLED" "$QARGO_AI_ENABLED_INPUT" "true" "false"
 
 if [[ "$ROUTE_PROVIDER_VALUE" == "google" ]]; then
   require_real_value "GOOGLE_MAPS_API_KEY" "$GOOGLE_MAPS_API_KEY_INPUT"
@@ -468,6 +511,10 @@ fi
 
 if [[ "$SUPPORT_TRANSLATION_ENABLED_INPUT" == "true" ]]; then
   require_real_value "GOOGLE_TRANSLATE_API_KEY" "$GOOGLE_TRANSLATE_API_KEY_INPUT"
+fi
+
+if [[ "$QARGO_AI_ENABLED_INPUT" == "true" ]]; then
+  require_real_value "OPENAI_API_KEY" "$OPENAI_API_KEY_INPUT"
 fi
 
 s3_settings_supplied=0
@@ -511,6 +558,12 @@ set_var "$BACKEND_SERVICE" "SUPPORT_PHONE=$SUPPORT_PHONE_INPUT"
 set_var "$BACKEND_SERVICE" "SUPPORT_TRANSLATION_ENABLED=$SUPPORT_TRANSLATION_ENABLED_INPUT"
 set_var "$BACKEND_SERVICE" "SUPPORT_TRANSLATION_TARGET_LANGUAGE=$SUPPORT_TRANSLATION_TARGET_LANGUAGE_INPUT"
 set_var "$BACKEND_SERVICE" "GOOGLE_TRANSLATE_API_URL=$GOOGLE_TRANSLATE_API_URL_INPUT"
+set_var "$BACKEND_SERVICE" "QARGO_AI_ENABLED=$QARGO_AI_ENABLED_INPUT"
+set_var "$BACKEND_SERVICE" "QARGO_AI_MODEL_DEFAULT=$QARGO_AI_MODEL_DEFAULT_INPUT"
+set_var "$BACKEND_SERVICE" "QARGO_AI_MODEL_COMPLEX=$QARGO_AI_MODEL_COMPLEX_INPUT"
+set_var "$BACKEND_SERVICE" "QARGO_AI_MAX_TOOL_CALLS_PER_RUN=$QARGO_AI_MAX_TOOL_CALLS_PER_RUN_INPUT"
+set_var "$BACKEND_SERVICE" "QARGO_AI_MAX_TOKENS_PER_RUN=$QARGO_AI_MAX_TOKENS_PER_RUN_INPUT"
+set_var "$BACKEND_SERVICE" "QARGO_AI_MAX_RUNS_PER_MINUTE=$QARGO_AI_MAX_RUNS_PER_MINUTE_INPUT"
 set_var "$BACKEND_SERVICE" "NODE_ENV=production"
 set_var "$BACKEND_SERVICE" "AUTH_MODE=otp"
 set_var "$BACKEND_SERVICE" "OTP_PROVIDER=$OTP_PROVIDER_VALUE"
@@ -524,6 +577,7 @@ set_var "$BACKEND_SERVICE" "WAITING_RATE_PER_MINUTE=3"
 set_var "$BACKEND_SERVICE" "BASE_FARE_PER_KM=14"
 set_var_if_real "$BACKEND_SERVICE" "GOOGLE_MAPS_API_KEY" "$GOOGLE_MAPS_API_KEY_INPUT"
 set_var_if_real "$BACKEND_SERVICE" "GOOGLE_TRANSLATE_API_KEY" "$GOOGLE_TRANSLATE_API_KEY_INPUT"
+set_var_if_real "$BACKEND_SERVICE" "OPENAI_API_KEY" "$OPENAI_API_KEY_INPUT"
 set_var_if_real "$BACKEND_SERVICE" "IDFY_API_KEY" "$IDFY_API_KEY_INPUT"
 set_var_if_real "$BACKEND_SERVICE" "IDFY_API_URL" "$IDFY_API_URL_INPUT"
 set_var_if_real "$BACKEND_SERVICE" "IDFY_ACCOUNT_ID" "$IDFY_ACCOUNT_ID_INPUT"

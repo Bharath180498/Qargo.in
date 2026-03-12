@@ -1,6 +1,28 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api';
 const ADMIN_TOKEN_KEY = 'qargo_admin_token';
 
+function extractErrorMessage(payload: unknown) {
+  if (!payload || typeof payload !== 'object') {
+    return '';
+  }
+
+  if ('message' in payload) {
+    const message = (payload as { message?: unknown }).message;
+    if (typeof message === 'string') {
+      return message;
+    }
+    if (Array.isArray(message)) {
+      return message.filter((entry) => typeof entry === 'string').join(', ');
+    }
+  }
+
+  if ('error' in payload && typeof (payload as { error?: unknown }).error === 'string') {
+    return (payload as { error: string }).error;
+  }
+
+  return '';
+}
+
 function isBrowser() {
   return typeof window !== 'undefined';
 }
@@ -60,7 +82,9 @@ export async function fetcher<T>(path: string, options?: { auth?: boolean }): Pr
   }
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    const payload = await response.json().catch(() => null);
+    const detail = extractErrorMessage(payload);
+    throw new Error(detail || `Request failed: ${response.status}`);
   }
 
   return response.json();
@@ -89,7 +113,9 @@ export async function postJson<T>(
   }
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    const payload = await response.json().catch(() => null);
+    const detail = extractErrorMessage(payload);
+    throw new Error(detail || `Request failed: ${response.status}`);
   }
 
   return response.json();

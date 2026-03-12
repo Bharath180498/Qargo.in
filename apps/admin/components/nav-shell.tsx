@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AdminAuthGate } from './admin-auth-gate';
 import { clearAdminToken } from '../lib/api';
+import { QargoAiAssistant } from './qargo-ai-assistant';
 
 const navItems = [
   { href: '/operations', label: 'Operations' },
@@ -89,6 +90,7 @@ export function NavShell({ children }: { children: ReactNode }) {
             <main className="px-4 py-5 sm:px-6 lg:px-8">{children}</main>
           </div>
         </div>
+        <QargoAiAssistant />
       </div>
     </AdminAuthGate>
   );

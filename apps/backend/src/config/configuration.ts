@@ -34,6 +34,15 @@ export default () => ({
     googleApiUrl:
       process.env.GOOGLE_TRANSLATE_API_URL ?? 'https://translation.googleapis.com/language/translate/v2'
   },
+  qargoAi: {
+    enabled: process.env.QARGO_AI_ENABLED === 'true',
+    openAiApiKey: process.env.OPENAI_API_KEY ?? '',
+    modelDefault: process.env.QARGO_AI_MODEL_DEFAULT ?? 'gpt-4o-mini',
+    modelComplex: process.env.QARGO_AI_MODEL_COMPLEX ?? 'gpt-4.1',
+    maxToolCallsPerRun: Number(process.env.QARGO_AI_MAX_TOOL_CALLS_PER_RUN ?? 8),
+    maxTokensPerRun: Number(process.env.QARGO_AI_MAX_TOKENS_PER_RUN ?? 4000),
+    maxRunsPerMinute: Number(process.env.QARGO_AI_MAX_RUNS_PER_MINUTE ?? 12)
+  },
   googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY ?? '',
   idfyApiKey: process.env.IDFY_API_KEY ?? '',
   idfyApiUrl: process.env.IDFY_API_URL ?? '',

@@ -23,6 +23,7 @@ import { KycModule } from './modules/kyc/kyc.module';
 import { MapsModule } from './modules/maps/maps.module';
 import { SupportModule } from './modules/support/support.module';
 import { AppConfigModule } from './modules/app-config/app-config.module';
+import { AdminAiModule } from './modules/admin-ai/admin-ai.module';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { AppConfigModule } from './modules/app-config/app-config.module';
     MapsModule,
     AppConfigModule,
     AdminModule,
+    AdminAiModule,
     HealthModule
   ]
 })

@@ -126,6 +126,7 @@ export class KycService {
       })),
       onboarding: {
         fullName: onboarding.fullName,
+        phone: onboarding.phone,
         aadhaarNumber: onboarding.aadhaarNumber,
         licenseNumber: onboarding.licenseNumber,
         rcNumber: onboarding.rcNumber,

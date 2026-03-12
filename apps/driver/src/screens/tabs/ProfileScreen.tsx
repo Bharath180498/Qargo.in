@@ -96,6 +96,7 @@ export function ProfileScreen() {
   const disconnectRealtime = useDriverAppStore((state) => state.disconnectRealtime);
   const loadOnboarding = useOnboardingStore((state) => state.load);
   const updateBank = useOnboardingStore((state) => state.updateBank);
+  const addPaymentMethod = useOnboardingStore((state) => state.addPaymentMethod);
   const uploadPaymentMethodQr = useOnboardingStore((state) => state.uploadPaymentMethodQr);
   const setPreferredPaymentMethod = useOnboardingStore((state) => state.setPreferredPaymentMethod);
   const onboardingLoading = useOnboardingStore((state) => state.loading);
@@ -114,7 +115,9 @@ export function ProfileScreen() {
   const setGuidedHintsEnabled = useDriverUxStore((state) => state.setGuidedHintsEnabled);
 
   const [upiId, setUpiId] = useState('');
+  const [newUpiId, setNewUpiId] = useState('');
   const [savingPayout, setSavingPayout] = useState(false);
+  const [addingUpiMethod, setAddingUpiMethod] = useState(false);
   const [showWalletMore, setShowWalletMore] = useState(false);
 
   useEffect(() => {
@@ -223,6 +226,39 @@ export function ProfileScreen() {
       });
     } catch {
       Alert.alert('Share failed', 'Could not share UPI link right now.');
+    }
+  };
+
+  const addAnotherUpiId = async () => {
+    const normalizedNewUpi = normalizeUpiId(newUpiId);
+    if (!normalizedNewUpi || !isValidUpiId(normalizedNewUpi)) {
+      Alert.alert('Invalid UPI', 'Enter a valid UPI ID (example: driver@okaxis).');
+      return;
+    }
+
+    const duplicate = paymentMethods.some(
+      (method) => normalizeUpiId(method.upiId) === normalizedNewUpi
+    );
+    if (duplicate) {
+      Alert.alert('Already added', 'This UPI ID is already in your wallet.');
+      return;
+    }
+
+    try {
+      setAddingUpiMethod(true);
+      await addPaymentMethod({
+        upiId: normalizedNewUpi,
+        label: `UPI ${paymentMethods.length + 1}`,
+        isPreferred: paymentMethods.length === 0
+      });
+      if (paymentMethods.length === 0) {
+        setUpiId(normalizedNewUpi);
+      }
+      setNewUpiId('');
+    } catch {
+      Alert.alert('Could not add UPI', useOnboardingStore.getState().error ?? 'Please try again.');
+    } finally {
+      setAddingUpiMethod(false);
     }
   };
 
@@ -336,6 +372,62 @@ export function ProfileScreen() {
             </Pressable>
           </View>
 
+          <View style={styles.walletStackSection}>
+            <Text style={styles.fieldLabel}>Saved UPI cards</Text>
+            <Text style={styles.walletStackHint}>Tap any card to set it as default for every ride.</Text>
+            {paymentMethods.length === 0 ? (
+              <Text style={styles.helperText}>No UPI cards yet. Save one UPI ID to start.</Text>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.walletStackRow}
+              >
+                {paymentMethods.map((method, index) => (
+                  <Pressable
+                    key={method.id}
+                    style={[
+                      styles.walletMethodCard,
+                      index > 0 ? styles.walletMethodCardOverlap : undefined,
+                      { zIndex: paymentMethods.length - index },
+                      method.isPreferred ? styles.walletMethodCardActive : undefined
+                    ]}
+                    onPress={() => {
+                      setUpiId(method.upiId);
+                      if (!method.isPreferred) {
+                        void setPreferredPaymentMethod(method.id);
+                      }
+                    }}
+                  >
+                    <Text style={styles.walletMethodLabel}>{method.label ?? 'UPI Wallet'}</Text>
+                    <Text style={styles.walletMethodUpi}>{method.upiId}</Text>
+                    <Text style={styles.walletMethodState}>{method.isPreferred ? 'Default' : 'Tap to make default'}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+
+          <Text style={styles.fieldLabel}>Add another UPI ID</Text>
+          <View style={styles.addUpiRow}>
+            <TextInput
+              style={[styles.input, styles.addUpiInput]}
+              value={newUpiId}
+              onChangeText={setNewUpiId}
+              autoCapitalize="none"
+              placeholder="secondupi@ybl"
+              placeholderTextColor={colors.mutedText}
+            />
+            <Pressable style={styles.addUpiButton} onPress={() => void addAnotherUpiId()} disabled={addingUpiMethod}>
+              {addingUpiMethod ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <Text style={styles.addUpiButtonText}>Add</Text>
+              )}
+            </Pressable>
+          </View>
+          <Text style={styles.helperText}>You can save many UPI IDs and switch default anytime.</Text>
+
           {upiReady && dynamicQrPreviewUrl ? (
             <View style={styles.dynamicQrCard}>
               <Text style={styles.dynamicQrTitle}>Live UPI QR</Text>
@@ -353,25 +445,6 @@ export function ProfileScreen() {
               <Pressable style={styles.secondaryButton} onPress={() => void shareDynamicUpiLink()} disabled={!upiReady}>
                 <Text style={styles.secondaryText}>Share UPI Link</Text>
               </Pressable>
-
-              {paymentMethods.length === 0 ? (
-                <Text style={styles.helperText}>No extra UPI IDs saved yet.</Text>
-              ) : (
-                paymentMethods.map((method) => (
-                  <Pressable
-                    key={method.id}
-                    style={[styles.methodSimpleCard, method.isPreferred && styles.methodSimpleCardActive]}
-                    onPress={() => {
-                      if (!method.isPreferred) {
-                        void setPreferredPaymentMethod(method.id);
-                      }
-                    }}
-                  >
-                    <Text style={styles.methodTitle}>{method.upiId}</Text>
-                    <Text style={styles.methodSubtitle}>{method.isPreferred ? 'Active UPI' : 'Tap to make active'}</Text>
-                  </Pressable>
-                ))
-              )}
             </View>
           ) : null}
         </View>
@@ -559,6 +632,79 @@ const styles = StyleSheet.create({
     fontFamily: typography.bodyBold,
     color: '#334155'
   },
+  walletStackSection: {
+    marginTop: spacing.sm,
+    gap: spacing.xs
+  },
+  walletStackHint: {
+    fontFamily: typography.body,
+    color: '#64748B',
+    fontSize: 12
+  },
+  walletStackRow: {
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.xs + 2,
+    paddingRight: spacing.md
+  },
+  walletMethodCard: {
+    width: 208,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    padding: spacing.sm,
+    gap: 4,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.14,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 12,
+    elevation: 3
+  },
+  walletMethodCardOverlap: {
+    marginLeft: -36
+  },
+  walletMethodCardActive: {
+    borderColor: '#0EA5E9',
+    backgroundColor: '#E0F2FE'
+  },
+  walletMethodLabel: {
+    fontFamily: typography.bodyBold,
+    color: '#1E293B',
+    fontSize: 12
+  },
+  walletMethodUpi: {
+    fontFamily: typography.bodyBold,
+    color: '#0F172A',
+    fontSize: 14
+  },
+  walletMethodState: {
+    fontFamily: typography.body,
+    color: '#475569',
+    fontSize: 11
+  },
+  addUpiRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    alignItems: 'center'
+  },
+  addUpiInput: {
+    flex: 1
+  },
+  addUpiButton: {
+    minWidth: 72,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: '#0284C7',
+    backgroundColor: '#0284C7',
+    paddingVertical: spacing.sm - 2,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  addUpiButtonText: {
+    fontFamily: typography.bodyBold,
+    color: colors.white
+  },
   dynamicQrCard: {
     marginTop: spacing.sm,
     borderRadius: radius.md,
@@ -585,27 +731,6 @@ const styles = StyleSheet.create({
   methodList: {
     gap: spacing.xs,
     marginTop: spacing.sm
-  },
-  methodSimpleCard: {
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.sm,
-    backgroundColor: colors.paper
-  },
-  methodSimpleCardActive: {
-    borderColor: '#0EA5E9',
-    backgroundColor: '#F0F9FF'
-  },
-  methodTitle: {
-    fontFamily: typography.bodyBold,
-    color: colors.accent,
-    fontSize: 13
-  },
-  methodSubtitle: {
-    fontFamily: typography.body,
-    color: colors.mutedText,
-    fontSize: 12
   },
   secondaryButton: {
     borderRadius: radius.sm,

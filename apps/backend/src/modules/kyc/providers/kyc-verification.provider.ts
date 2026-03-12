@@ -8,6 +8,7 @@ export interface VerifyKycInput {
   }>;
   onboarding?: {
     fullName?: string | null;
+    phone?: string | null;
     aadhaarNumber?: string | null;
     licenseNumber?: string | null;
     rcNumber?: string | null;
